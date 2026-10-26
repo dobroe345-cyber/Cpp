@@ -15,10 +15,11 @@ struct Fin { int id; float x, y, bx, by; };        // finger
 static vector<V> vb; static vector<Node> nodes; static vector<Blk> blks;
 static GLint uM, uFog, uLit; static int W = 0, H = 0; static float K = 1;
 static float px = 0, py = 0, pz = 0, vy = 0, yaw = 0, pitch = 0, hp = 100, food = 100;
-static float tod = .1f, cd = 0, hudT = 0, msgT = 0; static int wood = 0, stone = 0, mode = 0;
-static char msg[48] = ""; static Fin st = {-1}, lk = {-1}; static int bid[3] = {-1, -1, -1};
-static bool jumpReq = 0, buildReq = 0; static double last = 0; static unsigned rs = 12345;
+static float tod = .1f, cd = 0, hudT = 0, msgT = 0; static int wood = 60, stone = 0, mode = 0;
+static char msg[48] = ""; static Fin st = {-1}, lk = {-1};
+static double last = 0; static unsigned rs = 12345;
 
+EM_JS(int, gk, (int i), { var v = window.G[i] | 0; if (i == 1) window.G[1] = 0; return v; });
 EM_JS(void, hud, (const char* s), { document.getElementById('hud').textContent = UTF8ToString(s); });
 
 static const char* VS = "attribute vec3 p;attribute vec3 c;uniform mat4 m;varying vec3 vc;varying float d;"
@@ -84,31 +85,15 @@ static void act() {
   else if (best->type == 1) { stone += 8; say("+8 камня"); }
   else { food = fminf(100, food + 20); say("+20 еды"); }
 }
-static void btn(int i, float& x, float& y, float& r) {
-  float s = fminf(W, H)/400.f;
-  float c[3][3] = {{W-85*s, H-90*s, 50*s}, {W-60*s, H-185*s, 30*s}, {W-175*s, H-55*s, 30*s}};
-  x = c[i][0]; y = c[i][1]; r = c[i][2];
-}
 static EM_BOOL tc(int type, const EmscriptenTouchEvent* e, void*) {
   for (int i = 0; i < e->numTouches; i++) {
     const auto& t = e->touches[i]; if (!t.isChanged) continue;
     float x = t.targetX*K, y = t.targetY*K; int id = t.identifier;
-    if (type == EMSCRIPTEN_EVENT_TOUCHSTART) {
-      int b = -1;
-      for (int j = 0; j < 3; j++) { float bx, by, r; btn(j, bx, by, r); if (hypotf(x-bx, y-by) < r*1.3f) b = j; }
-      if (b >= 0) { bid[b] = id; if (b == 1) jumpReq = 1; if (b == 2) buildReq = 1; }
-      else if (x < W*.5f && st.id < 0) st = {id, x, y, x, y};
-      else if (lk.id < 0) lk = {id, x, y, x, y};
-    } else if (type == EMSCRIPTEN_EVENT_TOUCHMOVE) {
+    if (type == EMSCRIPTEN_EVENT_TOUCHSTART) { if (x < W*.5f && st.id < 0) st = {id, x, y, x, y}; else if (lk.id < 0) lk = {id, x, y, x, y}; }
+    else if (type == EMSCRIPTEN_EVENT_TOUCHMOVE) {
       if (id == st.id) { st.x = x; st.y = y; }
-      else if (id == lk.id) {
-        yaw -= (x-lk.x)/K*.006f; pitch = fminf(fmaxf(pitch - (y-lk.y)/K*.006f, -1.4f), 1.4f); lk.x = x; lk.y = y;
-      }
-    } else {
-      if (id == st.id) st.id = -1;
-      if (id == lk.id) lk.id = -1;
-      for (int b = 0; b < 3; b++) if (bid[b] == id) bid[b] = -1;
-    }
+      else if (id == lk.id) { yaw -= (x-lk.x)/K*.006f; pitch = fminf(fmaxf(pitch - (y-lk.y)/K*.006f, -1.4f), 1.4f); lk.x = x; lk.y = y; }
+    } else { if (id == st.id) st.id = -1; if (id == lk.id) lk.id = -1; }
   }
   return EM_TRUE;
 }
@@ -127,42 +112,53 @@ static void update(float dt) {
   }
   for (auto& b : blks) if (b.wall) push(px, pz, b.x-b.w/2, b.z-b.d/2, b.x+b.w/2, b.z+b.d/2);
   float gy = 0; for (auto& b : blks) if (!b.wall && fabsf(px-b.x) < 2 && fabsf(pz-b.z) < 2) gy = .3f;
-  if (jumpReq && py <= gy + .01f) vy = 7;
-  jumpReq = 0; vy -= 20*dt; py += vy*dt; if (py < gy) { py = gy; vy = 0; }
-  if (buildReq) { mode = (mode+1) % 3; buildReq = 0; }
-  if (bid[0] >= 0 && cd <= 0) act();
+  if (gk(1) && py <= gy + .01f) vy = 7;
+  vy -= 20*dt; py += vy*dt; if (py < gy) { py = gy; vy = 0; }
+  mode = gk(2);
+  if (gk(0) && cd <= 0) act();
+}
+static void cone(float x, float y, float z, float rad, float h, float r, float g, float b) {
+  for (int i = 0; i < 8; i++) {
+    float a0 = i*.7854f, a1 = a0 + .7854f, l = .5f + .5f*fmaxf(0.f, cosf(a0 + .39f - 2.2f));
+    vb.push_back({x+rad*cosf(a0), y, z+rad*sinf(a0), r*l, g*l, b*l});
+    vb.push_back({x+rad*cosf(a1), y, z+rad*sinf(a1), r*l, g*l, b*l});
+    vb.push_back({x, y+h, z, r*l*1.15f, g*l*1.15f, b*l*1.15f});
+  }
+}
+static void rock(float x, float z, float s, float r, float g, float b) {
+  float P[6][3] = {{x+s,.4f*s,z},{x,.4f*s,z+s*.9f},{x-s,.4f*s,z},{x,.4f*s,z-s*.9f},{x,s*1.1f,z},{x,0,z}};
+  static const int F[8][3] = {{0,1,4},{1,2,4},{2,3,4},{3,0,4},{1,0,5},{2,1,5},{3,2,5},{0,3,5}};
+  for (int f = 0; f < 8; f++) { float l = f > 3 ? .45f : .6f + .1f*f;
+    for (int k = 0; k < 3; k++) vb.push_back({P[F[f][k]][0], P[F[f][k]][1], P[F[f][k]][2], r*l, g*l, b*l}); }
 }
 static void render(float dt) {
   float k = fminf(fmaxf(sinf(tod*6.2832f)*2 + .5f, .06f), 1.f), sky[3] = {.45f*k, .7f*k, .95f*k};
-  glViewport(0, 0, W, H); glClearColor(sky[0], sky[1], sky[2], 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
+  glViewport(0, 0, W, H); glClearColor(sky[0]*.7f, sky[1]*.82f, sky[2]*.98f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
   float a = (float)W/H, f = 1/tanf(.55f), n = .1f, fa = 120.f;
   float P[16] = {f/a,0,0,0, 0,f,0,0, 0,0,(fa+n)/(n-fa),-1, 0,0,2*fa*n/(n-fa),0};
   float c = cosf(-yaw), s = sinf(-yaw), c2 = cosf(-pitch), s2 = sinf(-pitch);
   float Ry[16] = {c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1}, Rx[16] = {1,0,0,0, 0,c2,s2,0, 0,-s2,c2,0, 0,0,0,1};
   float T[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, -px,-(py+1.7f),-pz,1}, A[16], B[16];
   mul(A, Rx, Ry); mul(B, A, T); mul(A, P, B);
-  box(0, -.2f, 0, 400, .2f, 400, .25f, .5f, .2f);
+  int cx = (int)floorf(px/8), cz = (int)floorf(pz/8);
+  for (int i = -8; i <= 8; i++) for (int j = -8; j <= 8; j++) {
+    int gx = cx+i, gz = cz+j; float v = ((gx*7 + gz*13) & 3)*.03f;
+    box(gx*8+4, -.05f, gz*8+4, 8, .05f, 8, .22f+v, .5f+v, .2f+v*.5f);
+  }
   for (auto& o : nodes) {
     if (o.hp <= 0) continue; float dx = o.x-px, dz = o.z-pz; if (dx*dx + dz*dz > 8100) continue;
-    if (o.type == 0) { box(o.x,0,o.z,.5f,2.2f,.5f,.4f,.25f,.1f); box(o.x,1.8f,o.z,2.2f,1.6f,2.2f,.12f,.4f,.15f); box(o.x,3.2f,o.z,1.3f,1.2f,1.3f,.15f,.5f,.18f); }
-    else if (o.type == 1) { box(o.x,0,o.z,2.2f,1.4f,1.8f,.5f,.5f,.52f); box(o.x+.3f,1.2f,o.z,1.2f,.7f,1.1f,.55f,.55f,.58f); }
-    else { box(o.x,0,o.z,1,.6f,1,.1f,.35f,.12f); box(o.x,.6f,o.z,.5f,.3f,.5f,.8f,.1f,.15f); }
+    if (o.type == 0) { box(o.x,0,o.z,.5f,1.4f,.5f,.4f,.25f,.1f); cone(o.x,1.f,o.z,1.7f,1.9f,.1f,.36f,.16f); cone(o.x,2.2f,o.z,1.3f,1.7f,.12f,.44f,.18f); cone(o.x,3.3f,o.z,.85f,1.5f,.16f,.52f,.2f); }
+    else if (o.type == 1) { rock(o.x,o.z,1.3f,.5f,.5f,.54f); rock(o.x+.9f,o.z+.5f,.7f,.58f,.58f,.62f); }
+    else { rock(o.x,o.z,.6f,.1f,.4f,.12f); box(o.x+.2f,.45f,o.z,.2f,.2f,.2f,.85f,.1f,.15f); box(o.x-.2f,.35f,o.z+.15f,.2f,.2f,.2f,.85f,.1f,.15f); }
   }
   for (auto& b : blks) { if (b.wall) box(b.x,0,b.z,b.w,3,b.d,.6f,.42f,.22f); else box(b.x,0,b.z,b.w,.3f,b.d,.5f,.35f,.18f); }
-  if (mode) { Blk g = ghost(); if (g.wall) box(g.x,0,g.z,g.w,3,g.d,.9f,.9f,.3f); else box(g.x,.01f,g.z,g.w,.32f,g.d,.9f,.9f,.3f); }
+  if (mode) { Blk g = ghost(); bool ok = wood >= (mode == 1 ? 30 : 20); float gr = ok ? .3f : .9f, gg = ok ? .9f : .25f, gb = ok ? .3f : .2f; if (g.wall) box(g.x,0,g.z,g.w,3,g.d,gr,gg,gb); else box(g.x,.01f,g.z,g.w,.32f,g.d,gr,gg,gb); }
   flush(A, sky, .25f + .75f*k);
   glDisable(GL_DEPTH_TEST);
   float I[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}, u = fminf(W, H)/400.f;
   if (st.id >= 0) {
     float sx = st.x-st.bx, sy = st.y-st.by, l = hypotf(sx, sy), m = 60*u; if (l > m) { sx *= m/l; sy *= m/l; }
     disc(st.bx, st.by, m, .2f, .2f, .2f); disc(st.bx+sx, st.by+sy, 28*u, .8f, .8f, .8f);
-  }
-  for (int i = 0; i < 3; i++) {
-    float x, y, r; btn(i, x, y, r); float o = bid[i] >= 0 ? .3f : 0;
-    disc(x, y, r, i == 2 && mode ? .8f : .25f+o, i == 2 && mode ? .7f : .25f+o, .25f+o);
-    if (i == 0) disc(x, y, r*.45f, .95f, .95f, .95f);
-    else if (i == 1) disc(x, y, r*.5f, .95f, .95f, .95f, 3, -1.5708f);
-    else disc(x, y, r*.55f, .95f, .95f, .95f, 4, .7854f);
   }
   flush(I, sky, 1);
   hudT -= dt;
