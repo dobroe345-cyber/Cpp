@@ -17,7 +17,14 @@ canvas{position:fixed;inset:0;width:100vw;height:100dvh;display:block;touch-acti
 <canvas id="canvas"></canvas>
 <div id="hud">Загрузка…</div>
 <div id="x">+</div>
-<script>var Module={canvas:document.getElementById('canvas'),print:console.log,printErr:console.warn};</script>
-<script src="game.js"></script>
+<script>
+var hud=document.getElementById('hud');
+function fail(m){hud.style.color='#ffb4a8';hud.style.whiteSpace='pre-wrap';hud.textContent=m;}
+window.onerror=function(m){fail('Ошибка: '+m);};
+window.onunhandledrejection=function(e){fail('Ошибка: '+(e.reason&&e.reason.message||e.reason));};
+var Module={canvas:document.getElementById('canvas'),print:console.log,printErr:console.warn,onAbort:function(w){fail('Сбой: '+w);}};
+setTimeout(function(){if(hud.textContent.indexOf('Загрузка')===0)fail('Игра не запустилась за 10 секунд.\nПроверьте Settings → Pages → Source: GitHub Actions и вкладку Actions.');},10000);
+</script>
+<script src="game.js" onerror="fail('Файл game.js не найден.\nSettings → Pages → Source → GitHub Actions, затем запустите Deploy во вкладке Actions.')"></script>
 </body>
 </html>
