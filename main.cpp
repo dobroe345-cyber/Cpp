@@ -20,6 +20,7 @@ static char msg[48] = ""; static Fin st = {-1}, lk = {-1};
 static double last = 0; static unsigned rs = 12345;
 
 EM_JS(int, gk, (int i), { var v = window.G[i] | 0; if (i == 1) window.G[1] = 0; return v; });
+EM_JS(float, gf, (int i), { var v = window.G[i] || 0; if (i > 4) window.G[i] = 0; return v; });
 EM_JS(void, hud, (const char* s), { document.getElementById('hud').textContent = UTF8ToString(s); });
 
 static const char* VS = "attribute vec3 p;attribute vec3 c;uniform mat4 m;varying vec3 vc;varying float d;varying vec2 wp;"
@@ -114,8 +115,8 @@ static void update(float dt) {
   food -= dt*.4f;
   if (food <= 0) { food = 0; hp -= dt*2; } else if (food > 50 && hp < 100) hp = fminf(100, hp + dt*2);
   if (hp <= 0) { hp = 100; food = 100; wood = stone = 0; px = pz = 0; say("Ты умер. Ресурсы потеряны"); }
-  float sx = 0, sy = 0;
-  if (st.id >= 0) { float m = 60*fminf(W, H)/400.f; sx = (st.x-st.bx)/m; sy = (st.y-st.by)/m; float l = hypotf(sx, sy); if (l > 1) { sx /= l; sy /= l; } }
+  float sx = gf(3), sy = gf(4);
+  yaw -= gf(5)*.006f; pitch = fminf(fmaxf(pitch - gf(6)*.006f, -1.4f), 1.4f);
   float fx = -sinf(yaw), fz = -cosf(yaw), rx = cosf(yaw), rz = -sinf(yaw), sp = 5.f*(hypotf(sx, sy) > .95f ? 1.4f : 1.f);
   float ox = px, oz = pz; px += (fx*-sy + rx*sx)*sp*dt; pz += (fz*-sy + rz*sx)*sp*dt;
   for (auto& n : nodes) {
@@ -136,7 +137,7 @@ static void terrain() {
   for (int i = 0; i <= 2*N; i++) for (int j = 0; j <= 2*N; j++) {
     float x = (gx0-N+i)*C, z = (gz0-N+j)*C, h = hgt(x, z);
     float dx = hgt(x-2,z) - hgt(x+2,z), dz = hgt(x,z-2) - hgt(x,z+2), l = sqrtf(dx*dx + 16 + dz*dz), ny = 4/l;
-    float lit = .5f + .5f*fmaxf(0.f, (dx*.5f + 3.2f + dz*.3f)/l), v = pn(x*.25f, z*.25f), r, g, b;
+    float lit = .5f + .5f*fmaxf(0.f, (dx*.4f + 3.f - dz*.5f)/l), v = pn(x*.25f, z*.25f), r, g, b;
     if (h < -.2f) { float t = fminf(1.f, (-.2f-h)/4); r = .25f-.2f*t; g = .62f-.4f*t; b = .62f-.2f*t; lit = 1; h = -.2f; }
     else if (h < 1.3f) { r = .78f; g = .7f; b = .48f; }
     else if (ny < .8f) { r = .46f; g = .43f; b = .4f; }
@@ -145,6 +146,47 @@ static void terrain() {
   }
   auto P = [&](int i, int j) { vb.push_back({(gx0-N+i)*C, Y[i][j], (gz0-N+j)*C, Q[i][j][0], Q[i][j][1], Q[i][j][2]}); };
   for (int i = 0; i < 2*N; i++) for (int j = 0; j < 2*N; j++) { P(i,j); P(i+1,j); P(i+1,j+1); P(i,j); P(i+1,j+1); P(i,j+1); }
+}
+static void seg(float x0, float y0, float z0, float x1, float y1, float z1, float r0, float r1, float cr, float cg, float cb) {
+  for (int i = 0; i < 6; i++) {
+    float a0 = i*1.0472f, a1 = a0 + 1.0472f, l = .7f + .3f*cosf(a0 - 2.2f);
+    float p0x = x0 + r0*cosf(a0), p0z = z0 + r0*sinf(a0), p1x = x0 + r0*cosf(a1), p1z = z0 + r0*sinf(a1);
+    float q0x = x1 + r1*cosf(a0), q0z = z1 + r1*sinf(a0), q1x = x1 + r1*cosf(a1), q1z = z1 + r1*sinf(a1);
+    vb.push_back({p0x, y0, p0z, cr*l, cg*l, cb*l}); vb.push_back({p1x, y0, p1z, cr*l, cg*l, cb*l}); vb.push_back({q1x, y1, q1z, cr*l, cg*l, cb*l});
+    vb.push_back({p0x, y0, p0z, cr*l, cg*l, cb*l}); vb.push_back({q1x, y1, q1z, cr*l, cg*l, cb*l}); vb.push_back({q0x, y1, q0z, cr*l, cg*l, cb*l});
+  }
+}
+static void palm(float x, float y, float z) {
+  float an = vn((int)(x*5), (int)(z*5))*6.28f, bx = cosf(an)*.1f, bz = sinf(an)*.1f, Tx = x, Ty = y, Tz = z;
+  for (int k = 0; k < 5; k++) {
+    float nx = x + bx*(k+1)*(k+1), nz = z + bz*(k+1)*(k+1), ny = y + (k+1)*1.35f;
+    seg(Tx, Ty - (k ? 0.f : .3f), Tz, nx, ny, nz, .3f - .03f*k, .3f - .03f*(k+1), .5f, .38f, .24f); Tx = nx; Ty = ny; Tz = nz;
+  }
+  for (int q = 0; q < 7; q++) {
+    float b = q*.8976f + vn(q, (int)x)*.4f, ex = cosf(b), ez = sinf(b), sx = -ez, sz = ex;
+    for (int i = 0; i < 3; i++) {
+      float t0 = i/3.f, t1 = (i+1)/3.f, w0 = .6f*(1 - t0*.85f), w1 = .6f*(1 - t1*.85f);
+      float X0 = Tx + ex*3.6f*t0, Y0 = Ty + 1.2f*sinf(t0*2.2f) - 2.8f*t0*t0, Z0 = Tz + ez*3.6f*t0;
+      float X1 = Tx + ex*3.6f*t1, Y1 = Ty + 1.2f*sinf(t1*2.2f) - 2.8f*t1*t1, Z1 = Tz + ez*3.6f*t1;
+      vb.push_back({X0 - sx*w0, Y0, Z0 - sz*w0, .12f, .36f, .1f}); vb.push_back({X0 + sx*w0, Y0, Z0 + sz*w0, .12f, .36f, .1f}); vb.push_back({X1 + sx*w1, Y1, Z1 + sz*w1, .3f, .6f, .16f});
+      vb.push_back({X0 - sx*w0, Y0, Z0 - sz*w0, .12f, .36f, .1f}); vb.push_back({X1 + sx*w1, Y1, Z1 + sz*w1, .3f, .6f, .16f}); vb.push_back({X1 - sx*w1, Y1, Z1 - sz*w1, .3f, .6f, .16f});
+    }
+  }
+}
+static void grass(float tt) {   // swaying tufts around the player
+  int cx = (int)floorf(px/2), cz = (int)floorf(pz/2);
+  for (int i = -14; i <= 14; i++) for (int j = -14; j <= 14; j++) {
+    int gx = cx + i, gz = cz + j; if (vn(gx*3+1, gz*5+2) < .35f) continue;
+    float x = gx*2 + vn(gx, gz)*2, z = gz*2 + vn(gz+7, gx)*2, dx = x-px, dz = z-pz;
+    if (dx*dx + dz*dz > 784) continue;
+    float h = hgt(x, z); if (h < 1.6f) continue;
+    float s = .6f + .6f*vn(gx+3, gz+9), w = sinf(tt*2 + x*.7f + z*.5f)*.15f*s;
+    for (int q = 0; q < 3; q++) {
+      float a = q*1.047f + vn(gx, gz+q)*.5f, bx = cosf(a)*.15f, bz = sinf(a)*.15f;
+      vb.push_back({x-bx, h, z-bz, .1f, .28f, .07f}); vb.push_back({x+bx, h, z+bz, .1f, .28f, .07f});
+      vb.push_back({x + w + bx*.4f, h + .75f*s, z + w*.5f + bz*.4f, .4f, .66f, .2f});
+    }
+  }
 }
 static void cone(float x, float y, float z, float rad, float h, float r, float g, float b) {
   for (int i = 0; i < 8; i++) {
@@ -162,7 +204,7 @@ static void rock(float x, float y, float z, float s, float r, float g, float b) 
     for (int k = 0; k < 3; k++) vb.push_back({P[F[f][k]][0], P[F[f][k]][1], P[F[f][k]][2], r*l, g*l, b*l}); }
 }
 static void render(float dt) {
-  float k = fminf(fmaxf(sinf(tod*6.2832f)*2 + .5f, .06f), 1.f), sky[3] = {.45f*k, .7f*k, .95f*k};
+  float k = fminf(fmaxf(sinf(tod*6.2832f)*2 + .5f, .06f), 1.f), sky[3] = {.66f*k, .8f*k, .95f*k}, top[3] = {.2f*k, .42f*k, .85f*k};
   glViewport(0, 0, W, H); glClearColor(sky[0]*.7f, sky[1]*.82f, sky[2]*.98f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
   float a = (float)W/H, f = 1/tanf(.55f), n = .1f, fa = 120.f;
   float P[16] = {f/a,0,0,0, 0,f,0,0, 0,0,(fa+n)/(n-fa),-1, 0,0,2*fa*n/(n-fa),0};
@@ -170,26 +212,48 @@ static void render(float dt) {
   float Ry[16] = {c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1}, Rx[16] = {1,0,0,0, 0,c2,s2,0, 0,-s2,c2,0, 0,0,0,1};
   float T[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, -px,-(py+1.7f),-pz,1}, A[16], B[16];
   mul(A, Rx, Ry); mul(B, A, T); mul(A, P, B);
-  terrain();
+  static float tt = 0; tt += dt;
+  {
+    float I0[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    float yh = fminf(fmaxf(-f*tanf(pitch), -2.5f), 2.5f), Y4[4] = {-3.f, yh, fminf(yh + 1.3f, 3.f), 3.f}; const float* C4[4] = {sky, sky, top, top};
+    for (int q = 0; q < 3; q++) {
+      auto Q = [&](float x, int w) { vb.push_back({x, Y4[w], 0, C4[w][0], C4[w][1], C4[w][2]}); };
+      Q(-1, q); Q(1, q); Q(1, q+1); Q(-1, q); Q(1, q+1); Q(-1, q+1);
+    }
+    glDisable(GL_DEPTH_TEST); txOn = 0; flush(I0, sky, 1);
+    float th = tod*6.2832f, sn = sinf(th), cs = cosf(th), sd[3] = {.62f*cs, sn, -.78f*cs};
+    if (sn > -.06f) {
+      float sx0 = px + sd[0]*100, sy0 = py + 1.7f + sn*100, sz0 = pz + sd[2]*100;
+      const float R3[3] = {22, 13, 7.5f}, M3[3] = {.22f, .55f, 1.f};
+      for (int q = 0; q < 3; q++) {
+        float col[3] = {sky[0] + (1.f-sky[0])*M3[q], sky[1] + (.97f-sky[1])*M3[q], sky[2] + (.8f-sky[2])*M3[q]};
+        auto S = [&](float a2) { float c3 = cosf(a2), s3 = sinf(a2); vb.push_back({sx0 + R3[q]*(c3*.78f - s3*.62f*sn), sy0 + R3[q]*s3*.993f*cs, sz0 + R3[q]*(c3*.62f + s3*.78f*sn), col[0], col[1], col[2]}); };
+        for (int i = 0; i < 16; i++) { vb.push_back({sx0, sy0, sz0, col[0], col[1], col[2]}); S(i*.3927f); S((i+1)*.3927f); }
+        flush(A, col, 1);
+      }
+    }
+    float kk = .25f + .75f*k, cc[3] = {.93f*kk, .95f*kk, kk};
+    for (int i = 0; i < 20; i++) {
+      float x = fmodf((vn(i, 1) - .5f)*240 + tt*2.5f - px + 1000.f, 240.f) - 120.f, z = fmodf((vn(i, 2) - .5f)*240 - pz + 1000.f, 240.f) - 120.f;
+      if (x*x + z*z > 6400) continue;
+      for (int j = 0; j < 4; j++) box(px + x + (j-1.5f)*7, 42 + vn(i, 3)*22 + (j&1)*1.5f, pz + z + ((j*5)%3-1)*3.f, 12 + vn(i, j)*8, 3.5f, 8 + vn(j, i)*5, cc[0], cc[1], cc[2]);
+    }
+    flush(A, cc, 1);
+    glEnable(GL_DEPTH_TEST); txOn = 1;
+  }
+  terrain(); grass(tt);
   for (auto& o : nodes) {
     if (o.hp <= 0) continue; float dx = o.x-px, dz = o.z-pz; if (dx*dx + dz*dz > 8100) continue;
     if (o.type == 0) {
       float sc = .8f + .6f*vn((int)(o.x*9), (int)(o.z*9)); int nc = dx*dx + dz*dz < 2500 ? 5 : 3;
-      box(o.x, o.y, o.z, .5f*sc, 5.5f*sc, .5f*sc, .34f, .22f, .12f);
-      for (int q = 0; q < nc; q++) { float f = nc == 5 ? q : q*1.7f; cone(o.x, o.y + (1.3f + f*1.15f)*sc, o.z, (2.1f - .36f*f)*sc, 2.3f*sc, .07f + .02f*q, .27f + .04f*q, .11f); }
+      seg(o.x, o.y-.3f, o.z, o.x, o.y+6.f*sc, o.z, .55f*sc, .22f*sc, .36f, .24f, .13f);
+      for (int q = 0; q < nc; q++) { float f = nc == 5 ? q : q*1.7f; cone(o.x, o.y + (1.9f + f*1.2f)*sc, o.z, (2.3f - .4f*f)*sc*(.88f + .24f*vn(q, (int)o.x)), 2.5f*sc, .1f + .02f*q, .34f + .045f*q, .13f); }
     } else if (o.type == 1) {
       rock(o.x, o.y, o.z, 1.5f, .5f, .48f, .45f); rock(o.x + 1.1f, o.y, o.z + .6f, .9f, .56f, .54f, .5f); rock(o.x - .5f, o.y, o.z - 1.f, 1.f, .46f, .45f, .42f);
     } else if (o.type == 2) {
       rock(o.x, o.y, o.z, .75f, .1f, .34f, .1f); rock(o.x + .5f, o.y, o.z + .2f, .55f, .14f, .42f, .12f); rock(o.x - .4f, o.y, o.z + .3f, .5f, .12f, .38f, .1f);
       box(o.x + .15f, o.y + .75f, o.z, .16f, .16f, .16f, .85f, .1f, .15f); box(o.x - .3f, o.y + .6f, o.z + .35f, .16f, .16f, .16f, .85f, .1f, .15f);
-    } else {
-      for (int q = 0; q < 4; q++) box(o.x + q*.18f, o.y + q*1.3f, o.z, .35f, 1.4f, .35f, .45f, .33f, .18f);
-      float tx = o.x + .72f, ty = o.y + 5.2f;
-      for (int q = 0; q < 6; q++) { float a = q*1.047f;
-        vb.push_back({tx, ty, o.z, .1f, .5f, .15f});
-        vb.push_back({tx + 2.6f*cosf(a-.25f), ty - 1.2f, o.z + 2.6f*sinf(a-.25f), .12f, .42f, .14f});
-        vb.push_back({tx + 2.6f*cosf(a+.25f), ty - 1.2f, o.z + 2.6f*sinf(a+.25f), .12f, .42f, .14f}); }
-    }
+    } else palm(o.x, o.y, o.z);
   }
   for (auto& b : blks) { if (b.wall) box(b.x,b.y-1.2f,b.z,b.w,4.2f,b.d,.6f,.42f,.22f); else box(b.x,b.y-1.2f,b.z,b.w,1.5f,b.d,.5f,.35f,.18f); }
   if (mode) { Blk g = ghost(); bool ok = wood >= (mode == 1 ? 30 : 20); float gr = ok ? .3f : .9f, gg = ok ? .9f : .25f, gb = ok ? .3f : .2f; if (g.wall) box(g.x,g.y-1.2f,g.z,g.w,4.2f,g.d,gr,gg,gb); else box(g.x,g.y-1.2f,g.z,g.w,1.52f,g.d,gr,gg,gb); }
@@ -233,8 +297,6 @@ int main() {
     int ty = h < 2.f ? (r < .5f ? 3 : 2) : r < .55f ? 0 : r < .75f ? 1 : 2;
     nodes.push_back({x, z, 0, ty, ty == 0 ? 5 : ty == 1 ? 6 : ty == 3 ? 4 : 1, h});
   }
-  emscripten_set_touchstart_callback("#canvas", 0, 1, tc); emscripten_set_touchmove_callback("#canvas", 0, 1, tc);
-  emscripten_set_touchend_callback("#canvas", 0, 1, tc); emscripten_set_touchcancel_callback("#canvas", 0, 1, tc);
   say("Лево: ходьба · Право: камера"); msgT = 6;
   py = hgt(0, 0);
   emscripten_set_main_loop(loop, 0, 1);
