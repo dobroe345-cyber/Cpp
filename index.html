@@ -20,6 +20,9 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 #bar button{position:static;width:84px;height:76px;border-radius:16px}
 #pad{position:fixed;left:calc(30px + env(safe-area-inset-left));bottom:calc(30px + env(safe-area-inset-bottom));width:150px;height:150px;border-radius:50%;border:2px dashed rgba(255,255,255,.45);background:rgba(255,255,255,.07);color:rgba(255,255,255,.75);font:600 13px/150px -apple-system,system-ui,sans-serif;text-align:center;pointer-events:none}
 @media(max-height:480px){#hit{width:84px;height:84px}#jump{width:60px;height:60px;right:calc(124px + env(safe-area-inset-right))}#pad{width:110px;height:110px;line-height:110px}#bar button{width:68px;height:60px}button b{font-size:24px}}
+#touch{position:fixed;inset:0;z-index:2;touch-action:none}
+#jb{position:fixed;display:none;z-index:2;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.12);border:2px solid rgba(255,255,255,.55);pointer-events:none}
+#jk{position:absolute;left:36px;top:36px;width:48px;height:48px;border-radius:50%;background:rgba(255,255,255,.8);box-shadow:0 2px 8px rgba(0,0,0,.4)}
 </style>
 </head>
 <body>
@@ -29,9 +32,20 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 <button id="jump"><b>⤒</b>Прыжок</button>
 <button id="hit"><b>🪓</b><span id="hl">Удар</span></button>
 <div id="bar"><button data-s="0" class="on"><b>🪓</b>Сбор</button><button data-s="1"><b>🟫</b>Пол · 30</button><button data-s="2"><b>🧱</b>Стена · 20</button></div>
+<div id="touch"></div><div id="jb"><i id="jk"></i></div>
 <div id="pad">ходьба</div>
 <script>
-window.G=[0,0,0];
+window.G=[0,0,0,0,0,0,0];
+(function(){
+var t=document.getElementById('touch'),jb=document.getElementById('jb'),jk=document.getElementById('jk'),sid=-1,lid=-1,bx=0,by=0,lx=0,ly=0,R=60;
+function sv(e){var dx=e.clientX-bx,dy=e.clientY-by,l=Math.hypot(dx,dy);if(l>R){dx*=R/l;dy*=R/l;}G[3]=dx/R;G[4]=dy/R;jk.style.transform='translate('+dx+'px,'+dy+'px)';}
+t.addEventListener('pointerdown',function(e){e.preventDefault();try{t.setPointerCapture(e.pointerId);}catch(x){}
+if(e.clientX<innerWidth/2&&sid<0){sid=e.pointerId;bx=e.clientX;by=e.clientY;jb.style.display='block';jb.style.left=(bx-R)+'px';jb.style.top=(by-R)+'px';sv(e);}
+else if(lid<0){lid=e.pointerId;lx=e.clientX;ly=e.clientY;}});
+t.addEventListener('pointermove',function(e){if(e.pointerId===sid)sv(e);else if(e.pointerId===lid){G[5]+=e.clientX-lx;G[6]+=e.clientY-ly;lx=e.clientX;ly=e.clientY;}});
+function up(e){if(e.pointerId===sid){sid=-1;G[3]=0;G[4]=0;jb.style.display='none';}else if(e.pointerId===lid)lid=-1;}
+t.addEventListener('pointerup',up);t.addEventListener('pointercancel',up);
+})();
 (function(){
 function on(el,t,f){el.addEventListener(t,function(e){e.preventDefault();f();},{passive:false});}
 var hit=document.getElementById('hit'),hl=document.getElementById('hl'),sl=document.querySelectorAll('#bar button');
