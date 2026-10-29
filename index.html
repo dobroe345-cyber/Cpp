@@ -41,6 +41,16 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 #hit{right:calc(24px + env(safe-area-inset-right));bottom:calc(124px + env(safe-area-inset-bottom))}
 #jump{right:calc(148px + env(safe-area-inset-right));bottom:calc(136px + env(safe-area-inset-bottom))}
 @media(max-height:480px){#stats{width:165px}.st{height:22px}.st u{width:22px;font-size:12px}.st i{left:22px;width:calc(100% - 22px)}.st b{font-size:13px}#bar button{width:50px;height:50px}#bar button b{font-size:20px}#bar small{display:none}#hit{bottom:calc(96px + env(safe-area-inset-bottom))}#jump{bottom:calc(106px + env(safe-area-inset-bottom));right:calc(120px + env(safe-area-inset-right))}}
+#hud span,.st,#bar button{background:rgba(150,160,165,.42)}
+#hud span{border:1px solid rgba(255,255,255,.25)}
+.st{height:38px;margin-top:5px;border:2px solid rgba(255,255,255,.32)}
+.st u{width:38px;background:rgba(90,100,105,.55);font-size:20px}
+.st i{left:38px;width:calc(100% - 38px);opacity:.95}
+.st b{font-size:20px}
+#stats{width:250px}
+#bar button{border:2px solid rgba(255,255,255,.35)}
+#bar button.on{background:rgba(64,128,190,.75)}
+@media(max-height:480px){.st{height:30px}.st u{width:30px;font-size:16px}.st i{left:30px;width:calc(100% - 30px)}.st b{font-size:16px}#stats{width:200px}}
 </style>
 </head>
 <body>
