@@ -23,6 +23,24 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 #touch{position:fixed;inset:0;z-index:2;touch-action:none}
 #jb{position:fixed;display:none;z-index:2;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.12);border:2px solid rgba(255,255,255,.55);pointer-events:none}
 #jk{position:absolute;left:36px;top:36px;width:48px;height:48px;border-radius:50%;background:rgba(255,255,255,.8);box-shadow:0 2px 8px rgba(0,0,0,.4)}
+#hud{padding:10px 14px}
+#hud span{display:inline-block;margin-right:6px;padding:3px 9px;background:rgba(0,0,0,.45);border-radius:4px;font-size:15px}
+#hud em{display:block;margin-top:8px;font-style:normal;font-size:17px}
+#stats{position:fixed;z-index:3;right:calc(14px + env(safe-area-inset-right));bottom:calc(14px + env(safe-area-inset-bottom));width:210px;pointer-events:none}
+.st{position:relative;display:flex;align-items:center;height:28px;margin-top:4px;background:rgba(10,14,18,.6);border:1px solid rgba(255,255,255,.15);overflow:hidden}
+.st u{display:flex;align-items:center;justify-content:center;width:28px;height:100%;background:rgba(0,0,0,.4);font-size:15px;text-decoration:none;z-index:1}
+.st i{position:absolute;left:28px;top:0;bottom:0;width:calc(100% - 28px);background:var(--c);opacity:.9;transform-origin:left}
+.st b{position:relative;margin-left:auto;padding-right:9px;color:#fff;font:700 16px/1 -apple-system,system-ui,sans-serif;text-shadow:0 1px 2px rgba(0,0,0,.6)}
+#hp{--c:#7da83a}#th{--c:#3b8fd0}#hu{--c:#d98a2b}
+#bar{gap:6px;bottom:calc(14px + env(safe-area-inset-bottom))}
+#bar button{width:64px;height:64px;border-radius:4px;gap:0;font-size:10px;background:rgba(14,19,24,.62);border:2px solid rgba(255,255,255,.2);box-shadow:none}
+#bar button b{font-size:26px}
+#bar button em{position:absolute;left:5px;top:3px;font:700 11px/1 -apple-system,system-ui,sans-serif;font-style:normal;color:rgba(255,255,255,.75)}
+#bar button.on{background:rgba(64,128,190,.7);border-color:#fff;color:#fff}
+#bar button.no{opacity:.5;pointer-events:none}
+#hit{right:calc(24px + env(safe-area-inset-right));bottom:calc(124px + env(safe-area-inset-bottom))}
+#jump{right:calc(148px + env(safe-area-inset-right));bottom:calc(136px + env(safe-area-inset-bottom))}
+@media(max-height:480px){#stats{width:165px}.st{height:22px}.st u{width:22px;font-size:12px}.st i{left:22px;width:calc(100% - 22px)}.st b{font-size:13px}#bar button{width:50px;height:50px}#bar button b{font-size:20px}#bar small{display:none}#hit{bottom:calc(96px + env(safe-area-inset-bottom))}#jump{bottom:calc(106px + env(safe-area-inset-bottom));right:calc(120px + env(safe-area-inset-right))}}
 </style>
 </head>
 <body>
@@ -31,11 +49,16 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 <div id="x">+</div>
 <button id="jump"><b>⤒</b>Прыжок</button>
 <button id="hit"><b>🪓</b><span id="hl">Удар</span></button>
-<div id="bar"><button data-s="0" class="on"><b>🪓</b>Сбор</button><button data-s="1"><b>🟫</b>Пол · 30</button><button data-s="2"><b>🧱</b>Стена · 20</button></div>
+<div id="bar"><button data-s="0" class="on"><em>1</em><b>🪓</b><small>Топор</small></button><button data-s="1"><em>2</em><b>🟫</b><small>Пол · 30</small></button><button data-s="2"><em>3</em><b>🧱</b><small>Стена · 20</small></button><button class="no"><em>4</em></button><button class="no"><em>5</em></button><button class="no"><em>6</em></button></div>
 <div id="touch"></div><div id="jb"><i id="jk"></i></div>
+<div id="stats"><div class="st" id="hp"><u>✚</u><i></i><b>100</b></div><div class="st" id="th"><u>💧</u><i></i><b>100</b></div><div class="st" id="hu"><u>🍖</u><i></i><b>100</b></div></div>
 <div id="pad">ходьба</div>
 <script>
 window.G=[0,0,0,0,0,0,0];
+(function(){var hu=document.getElementById('hud');
+function bar(id,v){var e=document.getElementById(id);v=Math.max(0,Math.min(100,+v||0));e.children[1].style.transform='scaleX('+v/100+')';e.children[2].textContent=Math.round(v);}
+window.hudUpdate=function(s){var a=s.split('|');bar('hp',a[0]);bar('hu',a[1]);bar('th',a[2]);
+hu.innerHTML='<span>🪵 '+a[3]+'</span><span>🪨 '+a[4]+'</span><span>🔩 '+a[5]+'</span><span>🟡 '+a[6]+'</span>'+(a[7]?'<em>'+a[7]+'</em>':'');};})();
 (function(){
 var t=document.getElementById('touch'),jb=document.getElementById('jb'),jk=document.getElementById('jk'),sid=-1,lid=-1,bx=0,by=0,lx=0,ly=0,R=60;
 function sv(e){var dx=e.clientX-bx,dy=e.clientY-by,l=Math.hypot(dx,dy);if(l>R){dx*=R/l;dy*=R/l;}G[3]=dx/R;G[4]=dy/R;jk.style.transform='translate('+dx+'px,'+dy+'px)';}
@@ -48,7 +71,7 @@ t.addEventListener('pointerup',up);t.addEventListener('pointercancel',up);
 })();
 (function(){
 function on(el,t,f){el.addEventListener(t,function(e){e.preventDefault();f();},{passive:false});}
-var hit=document.getElementById('hit'),hl=document.getElementById('hl'),sl=document.querySelectorAll('#bar button');
+var hit=document.getElementById('hit'),hl=document.getElementById('hl'),sl=document.querySelectorAll('#bar button[data-s]');
 on(hit,'pointerdown',function(){G[0]=1;hit.classList.add('on');});
 ['pointerup','pointercancel','pointerleave'].forEach(function(t){on(hit,t,function(){G[0]=0;hit.classList.remove('on');});});
 on(document.getElementById('jump'),'pointerdown',function(){G[1]=1;});
