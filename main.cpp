@@ -13,30 +13,32 @@ struct Blk { float x, z, w, d; bool wall; float y; };       // building piece
 struct Fin { int id; float x, y, bx, by; };        // finger
 
 static vector<V> vb; static vector<Node> nodes; static vector<Blk> blks;
-static GLint uM, uFog, uLit, uTx, uSd, uEy, uTm; static float txOn = 1; static int W = 0, H = 0; static float K = 1;
+static GLint uM, uFog, uLit, uTx, uSd, uEy, uTm, uLm, uSm, uSs, uShLm; static GLuint prog, shProg, shFbo, shTex; static bool shOk = false; static vector<V> sv; static float txOn = 1; static int W = 0, H = 0; static float K = 1;
 static float px = 0, py = 0, pz = 0, vy = 0, yaw = 0, pitch = 0, hp = 100, food = 100;
-static float tod = .1f, cd = 0, hudT = 0, msgT = 0; static int wood = 60, stone = 0, mode = 0;
+static float tod = .1f, cd = 0, hudT = 0, msgT = 0; static int wood = 60, stone = 0, metal = 0, sulfur = 0, mode = 0; static float thirst = 100;
 static char msg[48] = ""; static Fin st = {-1}, lk = {-1};
 static double last = 0; static unsigned rs = 12345;
 
 EM_JS(int, gk, (int i), { var v = window.G[i] | 0; if (i == 1) window.G[1] = 0; return v; });
 EM_JS(float, gf, (int i), { var v = window.G[i] || 0; if (i > 4) window.G[i] = 0; return v; });
-EM_JS(void, hud, (const char* s), { document.getElementById('hud').textContent = UTF8ToString(s); });
+EM_JS(void, hud, (const char* s), { if (window.hudUpdate) window.hudUpdate(UTF8ToString(s)); });
 
-static const char* VS = "attribute vec3 p;attribute vec3 c;uniform mat4 m;varying vec3 vc;varying float d;varying vec3 wp;"
-  "void main(){gl_Position=m*vec4(p,1.);vc=c;d=gl_Position.w;wp=p;}";
+static const char* VS = "attribute vec3 p;attribute vec3 c;uniform mat4 m;uniform mat4 lm;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;"
+  "void main(){gl_Position=m*vec4(p,1.);vc=c;d=gl_Position.w;wp=p;ls=lm*vec4(p,1.);}";
 static const char* FS = "#extension GL_OES_standard_derivatives : enable\n"
-  "precision highp float;varying vec3 vc;varying float d;varying vec3 wp;uniform vec3 fog;uniform vec3 sd;uniform vec3 ey;uniform float lit;uniform float tx;uniform float tm;"
+  "precision highp float;varying vec3 vc;varying float d;varying vec3 wp;uniform vec3 fog;uniform vec3 sd;uniform vec3 ey;uniform float lit;uniform float tx;uniform float tm;uniform sampler2D sm;uniform float ss;varying vec4 ls;"
   "float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}"
   "float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1.,0.)),f.x),mix(h(i+vec2(0.,1.)),h(i+vec2(1.,1.)),f.x),f.y);}"
   "float wv(vec2 p){return n(p*.5+vec2(tm*.35,tm*.2))*.65+n(p*1.9-vec2(tm*.5,tm*.3))*.35;}"
+  "float up(vec4 c){return dot(c,vec4(1.,1./255.,1./65025.,1./16581375.));}"
+  "float shw(float bs){vec3 q=ls.xyz/ls.w*.5+.5;if(q.x<0.||q.x>1.||q.y<0.||q.y>1.||q.z>1.)return 1.;float s=0.;for(int i=0;i<4;i++){vec2 o=(vec2(mod(float(i),2.),floor(float(i)/2.))-.5)*.0015;s+=(q.z-bs>up(texture2D(sm,q.xy+o)))?0.:1.;}return s*.25;}"
   "void main(){vec3 c=vc;float a=1.;"
   "if(tx<.5){vec3 N=normalize(cross(dFdx(wp),dFdy(wp)));if(dot(N,ey-wp)<0.)N=-N;vec3 L=normalize(sd);float dif=max(dot(N,L),0.),hm=.5+.5*N.y,si=clamp(L.y*2.5+.2,0.,1.);"
-  "float g=n(wp.xz*5.+wp.y*3.)*.55+n(wp.xz*19.+wp.y*11.)*.45;c*=.72+.56*g;c*=lit*(.22+.3*hm)*vec3(.9,.95,1.1)+si*dif*vec3(.95,.88,.72);}"
+  "float g=n(wp.xz*5.+wp.y*3.)*.55+n(wp.xz*19.+wp.y*11.)*.45;c*=.72+.56*g;float sh=1.;if(ss>.5)sh=shw(.0012+.004*(1.-dif));c*=lit*(.22+.3*hm)*vec3(.9,.95,1.1)+si*dif*sh*vec3(.95,.88,.72);}"
   "else if(tx<1.5){vec2 p=wp.xz;float big=n(p*.08),mid=n(p*.6),fine=n(p*3.)*.5+n(p*13.)*.5;"
   "float gr=smoothstep(1.3,1.7,vc.g/(vc.r+.001)),sa=smoothstep(1.04,1.1,vc.r/(vc.g+.001))*smoothstep(1.2,1.35,vc.g/(vc.b+.001));"
   "c*=.7+.55*(mid*.35+fine*.65);c=mix(c,c*vec3(1.35,1.1,.55),gr*smoothstep(.45,.8,big));c=mix(c,c*vec3(.62,.78,.62),gr*(1.-smoothstep(.2,.55,mid))*.6);"
-  "c=mix(c,c*(.88+.24*sin(p.x*2.3+p.y*1.4+n(p*.7)*6.)),sa);c*=lit;}"
+  "c=mix(c,c*(.88+.24*sin(p.x*2.3+p.y*1.4+n(p*.7)*6.)),sa);c*=lit;if(ss>.5)c*=1.-(1.-shw(.004))*.5*clamp(sd.y*2.5+.2,0.,1.);}"
   "else if(tx<2.5){vec2 p=wp.xz;float dp=vc.r,e=.12,h0=wv(p),hx=wv(p+vec2(e,0.)),hz=wv(p+vec2(0.,e));"
   "vec3 N=normalize(vec3((h0-hx)*3.,1.,(h0-hz)*3.)),V=normalize(ey-wp),L=normalize(sd);float fr=pow(1.-max(dot(N,V),0.),3.);"
   "vec3 base=mix(vec3(.16,.62,.6),vec3(.02,.17,.34),clamp(dp/5.,0.,1.));float sp=pow(max(dot(reflect(-V,N),L),0.),90.);"
@@ -114,10 +116,12 @@ static void act() {
     float dx = n.x-px, dz = n.z-pz, d = sqrtf(dx*dx + dz*dz);
     if (d < bd && dx*fx + dz*fz > .6f*d) { bd = d; best = &n; }
   }
-  if (!best) { say("Мимо"); return; }
+  if (!best) { if (hgt(px + fx*3, pz + fz*3) < -.2f) { thirst = fminf(100.f, thirst + 18); say("Пьёшь воду"); } else say("Мимо"); return; }
   if (--best->hp <= 0) best->t = 60;
   if (best->type == 0 || best->type == 3 || best->type == 4) { wood += 10; say("+10 дерева"); }
   else if (best->type == 1) { stone += 8; say("+8 камня"); }
+  else if (best->type == 5) { metal += 6; say("+6 металла"); }
+  else if (best->type == 6) { sulfur += 6; say("+6 серы"); }
   else { food = fminf(100, food + 20); say("+20 еды"); }
 }
 static EM_BOOL tc(int type, const EmscriptenTouchEvent* e, void*) {
@@ -134,16 +138,16 @@ static EM_BOOL tc(int type, const EmscriptenTouchEvent* e, void*) {
 }
 static void update(float dt) {
   tod += dt/240; if (tod > 1) tod -= 1; cd -= dt; msgT -= dt;
-  food -= dt*.4f;
-  if (food <= 0) { food = 0; hp -= dt*2; } else if (food > 50 && hp < 100) hp = fminf(100, hp + dt*2);
-  if (hp <= 0) { hp = 100; food = 100; wood = stone = 0; px = pz = 0; say("Ты умер. Ресурсы потеряны"); }
+  food -= dt*.4f; thirst = fmaxf(0.f, thirst - dt*.55f);
+  if (food <= 0 || thirst <= 0) { food = fmaxf(food, 0.f); hp -= dt*2; } else if (food > 50 && thirst > 50 && hp < 100) hp = fminf(100, hp + dt*2);
+  if (hp <= 0) { hp = 100; food = 100; thirst = 100; wood = stone = metal = sulfur = 0; px = pz = 0; say("Ты умер. Ресурсы потеряны"); }
   float sx = gf(3), sy = gf(4);
   yaw -= gf(5)*.006f; pitch = fminf(fmaxf(pitch - gf(6)*.006f, -1.4f), 1.4f);
   float fx = -sinf(yaw), fz = -cosf(yaw), rx = cosf(yaw), rz = -sinf(yaw), sp = 5.f*(hypotf(sx, sy) > .95f ? 1.4f : 1.f);
   float ox = px, oz = pz; px += (fx*-sy + rx*sx)*sp*dt; pz += (fz*-sy + rz*sx)*sp*dt;
   for (auto& n : nodes) {
-    if (n.hp > 0) { float r = n.type == 0 || n.type == 4 ? .9f : n.type == 1 ? 1.2f : .5f; push(px, pz, n.x-r, n.z-r, n.x+r, n.z+r); }
-    else if ((n.t -= dt) <= 0) n.hp = n.type == 0 ? 5 : n.type == 1 ? 6 : n.type == 3 ? 4 : n.type == 4 ? 5 : 1;
+    if (n.hp > 0) { float r = n.type == 0 || n.type == 4 ? .9f : n.type == 1 || n.type >= 5 ? 1.3f : .5f; push(px, pz, n.x-r, n.z-r, n.x+r, n.z+r); }
+    else if ((n.t -= dt) <= 0) n.hp = n.type == 0 ? 5 : n.type == 1 || n.type >= 5 ? 7 : n.type == 3 ? 4 : n.type == 4 ? 5 : 1;
   }
   for (auto& b : blks) if (b.wall) push(px, pz, b.x-b.w/2, b.z-b.d/2, b.x+b.w/2, b.z+b.d/2);
   if (hgt(px, pz) < -.5f) { px = ox; pz = oz; }
@@ -282,6 +286,41 @@ static void rock(float x, float y, float z, float s, float r, float g, float b) 
   for (int f = 0; f < 8; f++) { float l = f > 3 ? .45f : .6f + .1f*f;
     for (int k = 0; k < 3; k++) vb.push_back({P[F[f][k]][0], P[F[f][k]][1], P[F[f][k]][2], r*l, g*l, b*l}); }
 }
+static void ore(float x, float y, float z, int t) {   // 0 stone, 1 metal, 2 sulfur
+  static const float C[3][3] = {{.64f,.64f,.66f},{.34f,.21f,.17f},{.3f,.32f,.24f}}, Kc[3][3] = {{.86f,.87f,.92f},{.66f,.32f,.12f},{.9f,.84f,.14f}};
+  rock(x, y, z, 1.6f, C[t][0], C[t][1], C[t][2]); rock(x + .9f, y, z + .5f, 1.f, C[t][0]*.88f, C[t][1]*.88f, C[t][2]*.88f);
+  for (int i = 0; i < 5; i++) { float a = i*1.3f + vn((int)x, i)*2.f, r = .3f + .8f*vn(i, (int)z); cone(x + cosf(a)*r, y + 1.1f + .5f*vn(i, 7), z + sinf(a)*r, .2f, .75f, Kc[t][0], Kc[t][1], Kc[t][2]); }
+}
+static void lightMat(float* LM, float lx, float ly, float lz) {   // orthographic sun view around the player
+  ly = fmaxf(ly, .25f); float ll = sqrtf(lx*lx + ly*ly + lz*lz); lx /= ll; ly /= ll; lz /= ll;
+  float ex = px + lx*100, ey = py + ly*100, ez = pz + lz*100, fx = -lx, fy = -ly, fz = -lz, ux = 0, uy = 1, uz = 0;
+  if (ly > .95f) { uy = 0; uz = 1; }
+  float rx = fy*uz - fz*uy, ry = fz*ux - fx*uz, rz = fx*uy - fy*ux, rl = sqrtf(rx*rx + ry*ry + rz*rz); rx /= rl; ry /= rl; rz /= rl;
+  float vx = ry*fz - rz*fy, vy = rz*fx - rx*fz, vz = rx*fy - ry*fx;
+  float V4[16] = {rx, vx, -fx, 0,  ry, vy, -fy, 0,  rz, vz, -fz, 0,  -(rx*ex + ry*ey + rz*ez), -(vx*ex + vy*ey + vz*ez), fx*ex + fy*ey + fz*ez, 1};
+  const float S = 45.f, nn = 20.f, ff = 180.f;
+  float Pl[16] = {1/S,0,0,0, 0,1/S,0,0, 0,0,-2/(ff-nn),0, 0,0,-(ff+nn)/(ff-nn),1};
+  mul(LM, Pl, V4);
+}
+static void shadowDraw(const float* LM) {
+  glBindFramebuffer(GL_FRAMEBUFFER, shFbo); glViewport(0, 0, 1024, 1024);
+  glClearColor(1, 1, 1, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
+  glUseProgram(shProg); glUniformMatrix4fv(uShLm, 1, 0, LM);
+  glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(V), sv.data(), GL_STREAM_DRAW); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)sv.size());
+  glBindFramebuffer(GL_FRAMEBUFFER, 0); glViewport(0, 0, W, H); glUseProgram(prog);
+}
+static void scene() {
+  for (auto& o : nodes) {
+    if (o.hp <= 0) continue; float dx = o.x-px, dz = o.z-pz; if (dx*dx + dz*dz > 8100) continue;
+    int lod = dx*dx + dz*dz < 1600, sd0 = (int)(o.x*7) ^ (int)(o.z*13);
+    if (o.type == 0) pine(o.x, o.y, o.z, .9f + .6f*vn(sd0, 1), lod ? 7 : 4);
+    else if (o.type == 1 || o.type >= 5) ore(o.x, o.y, o.z, o.type == 1 ? 0 : o.type - 4);
+    else if (o.type == 2) bush(o.x, o.y, o.z, sd0, lod);
+    else if (o.type == 4) oak(o.x, o.y, o.z, .9f + .5f*vn(sd0, 2), sd0, lod);
+    else palm(o.x, o.y, o.z);
+  }
+  for (auto& b : blks) { if (b.wall) box(b.x,b.y-1.2f,b.z,b.w,4.2f,b.d,.6f,.42f,.22f); else box(b.x,b.y-1.2f,b.z,b.w,1.5f,b.d,.5f,.35f,.18f); }
+}
 static void render(float dt) {
   float k = fminf(fmaxf(sinf(tod*6.2832f)*2 + .5f, .06f), 1.f), sky[3] = {.66f*k, .8f*k, .95f*k}, top[3] = {.2f*k, .42f*k, .85f*k};
   glViewport(0, 0, W, H); glClearColor(sky[0]*.7f, sky[1]*.82f, sky[2]*.98f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
@@ -321,19 +360,18 @@ static void render(float dt) {
     flush(A, cc, 1);
     glEnable(GL_DEPTH_TEST); txOn = 1;
   }
+  vb.clear(); scene(); sv.swap(vb);
+  float th2 = tod*6.2832f, L0[3] = {.62f*cosf(th2), sinf(th2), -.78f*cosf(th2)}, LM[16];
+  bool shOn = shOk && L0[1] > .08f;
+  if (shOn) {
+    lightMat(LM, L0[0], L0[1], L0[2]); shadowDraw(LM);
+    glUniformMatrix4fv(uLm, 1, 0, LM); glUniform1i(uSm, 1); glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, shTex); glActiveTexture(GL_TEXTURE0);
+  }
+  glUniform1f(uSs, shOn ? 1.f : 0.f);
   terrain(); grass(tt); flush(A, sky, lt);
   txOn = 2; water(); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); flush(A, sky, lt); glDisable(GL_BLEND);
   txOn = 0;
-  for (auto& o : nodes) {
-    if (o.hp <= 0) continue; float dx = o.x-px, dz = o.z-pz; if (dx*dx + dz*dz > 8100) continue;
-    int lod = dx*dx + dz*dz < 1600, sd0 = (int)(o.x*7) ^ (int)(o.z*13);
-    if (o.type == 0) pine(o.x, o.y, o.z, .9f + .6f*vn(sd0, 1), lod ? 7 : 4);
-    else if (o.type == 1) { rock(o.x, o.y, o.z, 1.5f, .5f, .48f, .45f); rock(o.x + 1.1f, o.y, o.z + .6f, .9f, .56f, .54f, .5f); rock(o.x - .5f, o.y, o.z - 1.f, 1.f, .46f, .45f, .42f); }
-    else if (o.type == 2) bush(o.x, o.y, o.z, sd0, lod);
-    else if (o.type == 4) oak(o.x, o.y, o.z, .9f + .5f*vn(sd0, 2), sd0, lod);
-    else palm(o.x, o.y, o.z);
-  }
-  for (auto& b : blks) { if (b.wall) box(b.x,b.y-1.2f,b.z,b.w,4.2f,b.d,.6f,.42f,.22f); else box(b.x,b.y-1.2f,b.z,b.w,1.5f,b.d,.5f,.35f,.18f); }
+  vb.swap(sv);
   if (mode) { Blk g = ghost(); bool ok = wood >= (mode == 1 ? 30 : 20); float gr = ok ? .3f : .9f, gg = ok ? .9f : .25f, gb = ok ? .3f : .2f; if (g.wall) box(g.x,g.y-1.2f,g.z,g.w,4.2f,g.d,gr,gg,gb); else box(g.x,g.y-1.2f,g.z,g.w,1.52f,g.d,gr,gg,gb); }
   flush(A, sky, .25f + .75f*k);
   glDisable(GL_DEPTH_TEST);
@@ -346,8 +384,7 @@ static void render(float dt) {
   hudT -= dt;
   if (hudT <= 0) {
     hudT = .1f; char b[160];
-    snprintf(b, sizeof b, "❤ %d  🍖 %d  🪵 %d  🪨 %d  %s  %s", (int)hp, (int)food, wood, stone,
-      mode == 1 ? "🔨 пол (30🪵)" : mode == 2 ? "🔨 стена (20🪵)" : "", msgT > 0 ? msg : "");
+    snprintf(b, sizeof b, "%d|%d|%d|%d|%d|%d|%d|%s", (int)hp, (int)food, (int)thirst, wood, stone, metal, sulfur, msgT > 0 ? msg : "");
     hud(b);
   }
 }
@@ -364,16 +401,30 @@ int main() {
   EmscriptenWebGLContextAttributes a; emscripten_webgl_init_context_attributes(&a); a.majorVersion = 1; a.antialias = 0;
   auto gctx = emscripten_webgl_create_context("#canvas", &a); emscripten_webgl_make_context_current(gctx); emscripten_webgl_enable_extension(gctx, "OES_standard_derivatives");
   GLuint p = glCreateProgram(); glAttachShader(p, sh(GL_VERTEX_SHADER, VS)); glAttachShader(p, sh(GL_FRAGMENT_SHADER, FS));
-  glBindAttribLocation(p, 0, "p"); glBindAttribLocation(p, 1, "c"); glLinkProgram(p); glUseProgram(p);
-  uM = glGetUniformLocation(p, "m"); uFog = glGetUniformLocation(p, "fog"); uLit = glGetUniformLocation(p, "lit"); uTx = glGetUniformLocation(p, "tx"); uSd = glGetUniformLocation(p, "sd"); uEy = glGetUniformLocation(p, "ey"); uTm = glGetUniformLocation(p, "tm");
+  glBindAttribLocation(p, 0, "p"); glBindAttribLocation(p, 1, "c"); glLinkProgram(p); glUseProgram(p); prog = p;
+  uM = glGetUniformLocation(p, "m"); uFog = glGetUniformLocation(p, "fog"); uLit = glGetUniformLocation(p, "lit"); uTx = glGetUniformLocation(p, "tx"); uSd = glGetUniformLocation(p, "sd"); uEy = glGetUniformLocation(p, "ey"); uTm = glGetUniformLocation(p, "tm"); uLm = glGetUniformLocation(p, "lm"); uSm = glGetUniformLocation(p, "sm"); uSs = glGetUniformLocation(p, "ss");
   GLuint bf; glGenBuffers(1, &bf); glBindBuffer(GL_ARRAY_BUFFER, bf);
   glEnableVertexAttribArray(0); glEnableVertexAttribArray(1);
   glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, (void*)0); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12);
+  {
+    const char* svs = "attribute vec3 p;uniform mat4 lm;varying float z;void main(){gl_Position=lm*vec4(p,1.);z=gl_Position.z*.5+.5;}";
+    const char* sfs = "precision highp float;varying float z;void main(){vec4 e=fract(z*vec4(1.,255.,65025.,16581375.));e-=e.yzww*vec4(1./255.,1./255.,1./255.,0.);gl_FragColor=e;}";
+    shProg = glCreateProgram(); glAttachShader(shProg, sh(GL_VERTEX_SHADER, svs)); glAttachShader(shProg, sh(GL_FRAGMENT_SHADER, sfs));
+    glBindAttribLocation(shProg, 0, "p"); glLinkProgram(shProg); uShLm = glGetUniformLocation(shProg, "lm");
+    glGenTextures(1, &shTex); glBindTexture(GL_TEXTURE_2D, shTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1024, 1024, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    GLuint rb; glGenRenderbuffers(1, &rb); glBindRenderbuffer(GL_RENDERBUFFER, rb); glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, 1024, 1024);
+    glGenFramebuffers(1, &shFbo); glBindFramebuffer(GL_FRAMEBUFFER, shFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, shTex, 0); glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
+    shOk = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE; glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
   for (int i = 0; i < 1200 && nodes.size() < 320; i++) {
     float x = (rnd()-.5f)*200, z = (rnd()-.5f)*200, h = hgt(x, z), r = rnd();
     if (hypotf(x, z) < 6 || h < .7f) continue;
-    int ty = h < 2.f ? (r < .5f ? 3 : 2) : r < .4f ? 0 : r < .62f ? 4 : r < .76f ? 1 : 2;
-    nodes.push_back({x, z, 0, ty, ty == 0 ? 5 : ty == 1 ? 6 : ty == 3 ? 4 : ty == 4 ? 5 : 1, h});
+    int ty = h < 2.f ? (r < .5f ? 3 : 2) : r < .4f ? 0 : r < .6f ? 4 : r < .69f ? 1 : r < .75f ? 5 : r < .8f ? 6 : 2;
+    nodes.push_back({x, z, 0, ty, ty == 0 ? 5 : ty == 1 || ty >= 5 ? 7 : ty == 3 ? 4 : ty == 4 ? 5 : 1, h});
   }
   say("Лево: ходьба · Право: камера"); msgT = 6;
   py = hgt(0, 0);
