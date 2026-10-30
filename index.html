@@ -51,12 +51,20 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 #bar button{border:2px solid rgba(255,255,255,.35)}
 #bar button.on{background:rgba(64,128,190,.75)}
 @media(max-height:480px){.st{height:30px}.st u{width:30px;font-size:16px}.st i{left:30px;width:calc(100% - 30px)}.st b{font-size:16px}#stats{width:200px}}
+#stats{width:190px}
+.st{height:30px;margin-top:5px;border:0}
+.st u{width:30px;background:none;font-size:16px}
+.st i{left:32px;top:4px;bottom:4px;width:calc(100% - 42px);opacity:1;border-radius:2px}
+.st b{font-size:16px;padding-right:14px}
+@media(max-height:480px){#stats{width:160px}.st{height:26px}.st u{width:26px;font-size:14px}.st i{left:28px;top:3px;bottom:3px;width:calc(100% - 36px)}.st b{font-size:14px;padding-right:12px}}
+#vig{position:fixed;inset:0;pointer-events:none;z-index:1;background:radial-gradient(ellipse at center,transparent 58%,rgba(0,0,0,.32) 100%)}
 </style>
 </head>
 <body>
 <canvas id="canvas"></canvas>
 <div id="hud">Загрузка…</div>
 <div id="x">+</div>
+<div id="vig"></div>
 <button id="jump"><b>⤒</b>Прыжок</button>
 <button id="hit"><b>🪓</b><span id="hl">Удар</span></button>
 <div id="bar"><button data-s="0" class="on"><em>1</em><b>🪓</b><small>Топор</small></button><button data-s="1"><em>2</em><b>🟫</b><small>Пол · 30</small></button><button data-s="2"><em>3</em><b>🧱</b><small>Стена · 20</small></button><button class="no"><em>4</em></button><button class="no"><em>5</em></button><button class="no"><em>6</em></button></div>
