@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <vector>
+#include <algorithm>
 using namespace std;
 
 struct V { float x, y, z, r, g, b; };
@@ -27,23 +28,27 @@ static const char* VS = "attribute vec3 p;attribute vec3 c;uniform mat4 m;unifor
   "void main(){gl_Position=m*vec4(p,1.);vc=c;d=gl_Position.w;wp=p;ls=lm*vec4(p,1.);}";
 static const char* FS = "#extension GL_OES_standard_derivatives : enable\n"
   "precision highp float;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;uniform vec3 fog;uniform vec3 sd;uniform vec3 ey;uniform float lit;uniform float tx;uniform float tm;uniform sampler2D sm;uniform float ss;"
-  "float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}"
+  "float h(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}"
   "float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*f*(f*(f*6.-15.)+10.);return mix(mix(h(i),h(i+vec2(1.,0.)),f.x),mix(h(i+vec2(0.,1.)),h(i+vec2(1.,1.)),f.x),f.y);}"
   "float wv(vec2 p){p=mat2(.8,.6,-.6,.8)*p;float a=n(p*.35+vec2(tm*.25,tm*.15))*.6;p=mat2(.8,.6,-.6,.8)*p*2.1;return a+n(p-vec2(tm*.45,tm*.3))*.28+n(p*2.3+tm*.6)*.12;}"
   "float lf(vec2 q){vec2 i=floor(q),f=fract(q)-.5;float a=h(i)*6.283;f+=(vec2(h(i+7.),h(i+13.))-.5)*.3;vec2 r=vec2(cos(a)*f.x+sin(a)*f.y,-sin(a)*f.x+cos(a)*f.y);return 1.-step(1.,length(r/vec2(.52,.24)));}float lfm(vec2 u){return max(lf(u*5.),lf(u*6.+3.1))*step(length(u-.5),.5);}"
   "float up(vec4 c){return dot(c,vec4(1.,1./255.,1./65025.,1./16581375.));}"
   "float shw(float bs){vec3 q=ls.xyz/ls.w*.5+.5;if(q.x<0.||q.x>1.||q.y<0.||q.y>1.||q.z>1.)return 1.;float s=(q.z-bs>up(texture2D(sm,q.xy)))?0.:1.;for(int i=0;i<8;i++){float a=float(i)*.785;vec2 o=vec2(cos(a),sin(a))*.0011;s+=(q.z-bs>up(texture2D(sm,q.xy+o)))?0.:1.;}float e=max(abs(q.x-.5),abs(q.y-.5))*2.;return mix(1.,s/9.,1.-smoothstep(.8,1.,e));}"
   "void main(){vec3 c=vc;float a=1.;"
-  "if(tx<.5){vec3 al=vc;bool fo=vc.b>1.5;if(fo){if(lfm(vc.xy)<.5)discard;float k=vc.b-2.,pl=floor(k+.01),t=(k-pl)/.99;vec3 a0=pl<.5?vec3(.07,.2,.05):(pl<1.5?vec3(.04,.14,.08):vec3(.1,.2,.05)),a1=pl<.5?vec3(.45,.62,.14):(pl<1.5?vec3(.2,.42,.2):vec3(.38,.52,.14));al=mix(a0,a1,t)*(.85+.3*h(floor(vc.xy*5.)));}"
-  "vec3 N=normalize(cross(dFdx(wp),dFdy(wp)));if(dot(N,ey-wp)<0.)N=-N;vec3 L=normalize(sd);float dl=dot(N,L),dif=fo?(max(dl,0.)+.25*max(-dl,0.)):max(dl,0.),hm=.5+.5*N.y,si=clamp(L.y*2.5+.2,0.,1.);"
-  "float g=n(wp.xz*5.+wp.y*3.)*.55+n(wp.xz*19.+wp.y*11.)*.45;c=al*(fo?.8+.3*g:.72+.56*g);float sh=1.;if(ss>.5)sh=shw(.0012+.004*(1.-dif));c*=lit*(.22+.3*hm)*vec3(.9,.95,1.1)+si*dif*sh*vec3(.95,.88,.72);}"
-  "else if(tx<1.5){vec2 p=wp.xz;float big=n(p*.08),mid=n(p*.6),fine=n(p*3.)*.5+n(p*13.)*.5;float gr=smoothstep(1.3,1.7,vc.g/(vc.r+.001)),sa=smoothstep(1.04,1.1,vc.r/(vc.g+.001))*smoothstep(1.2,1.35,vc.g/(vc.b+.001));c*=.7+.55*(mid*.35+fine*.65);c=mix(c,c*vec3(1.35,1.1,.55),gr*smoothstep(.45,.8,big));c=mix(c,c*vec3(.62,.78,.62),gr*(1.-smoothstep(.2,.55,mid))*.6);c=mix(c,c*(.88+.24*sin(p.x*2.3+p.y*1.4+n(p*.7)*6.)),sa);c*=lit;if(ss>.5)c*=1.-(1.-shw(.004))*.45*clamp(sd.y*2.5+.2,0.,1.);}"
-  "else if(tx<2.5){vec2 p=wp.xz;float dp=vc.r,e=.2,h0=wv(p),hx=wv(p+vec2(e,0.)),hz=wv(p+vec2(0.,e));vec3 N=normalize(vec3((h0-hx)*2.2,1.,(h0-hz)*2.2)),V=normalize(ey-wp),L=normalize(sd);float fr=pow(1.-max(dot(N,V),0.),4.);"
-  "vec3 base=mix(mix(vec3(.3,.78,.72),vec3(.08,.5,.72),clamp(dp/2.5,0.,1.)),vec3(.03,.22,.5),clamp((dp-2.5)/4.,0.,1.));float sp=pow(max(dot(reflect(-V,N),L),0.),140.);"
-  "c=mix(base,fog*1.08,clamp(fr*.9+.1,0.,1.))+sp*vec3(1.,.95,.8)*3.*clamp(L.y*3.,0.,1.);c*=.5+.5*lit;"
-  "float fm=1.-smoothstep(0.,.6,dp+(n(p*1.3+tm*.15)-.5)*.7);fm=clamp(fm*(.55+.45*sin(dp*10.-tm*1.8+n(p*.8)*5.)),0.,1.)*step(-.3,dp);c=mix(c,vec3(.95,.98,1.)*(.6+.4*lit),fm);a=max(clamp(.45+dp*.22,.45,.95),fm);}"
-  "else if(tx>4.5){vec2 q=(vc.xy-.5)*2.;float s2=vc.z*17.;float f=n(q*vec2(2.2,3.)+s2)*.55+n(q*vec2(4.5,6.)+s2*.7)*.3+n(q*9.+s2)*.15;float rr=length(q*vec2(.85,1.45));a=smoothstep(.33,.62,f+.45-rr*.95);c=mix(vec3(.66,.72,.84),vec3(1.),smoothstep(-.7,.8,q.y+(f-.5)*.9))*(.4+.6*lit);}"
-  "else if(tx>3.5){vec2 q=(vc.xy-.5)*2.;float r=length(q);c=vec3(1.,.93,.75)*(exp(-r*6.)*.55+exp(-r*18.)*.8)+vec3(1.,1.,.96)*(1.-smoothstep(.055,.075,r))*1.6;}"
+  "if(tx<.5){vec3 al=vc;bool fo=vc.b>1.5,rk=vc.r>5.&&!fo;if(fo){if(lfm(vc.xy)<.5)discard;float k=vc.b-2.,pl=floor(k+.01),t=(k-pl)/.99;vec3 a0=pl<.5?vec3(.07,.2,.05):(pl<1.5?vec3(.04,.14,.08):vec3(.1,.2,.05)),a1=pl<.5?vec3(.45,.62,.14):(pl<1.5?vec3(.2,.42,.2):vec3(.38,.52,.14));al=mix(a0,a1,t)*(.85+.3*h(floor(vc.xy*5.)));}"
+  "vec3 N=normalize(cross(dFdx(wp),dFdy(wp)));if(dot(N,ey-wp)<0.)N=-N;"
+  "if(rk){float m10=floor(vc.r/10.),mt=m10-1.,l2=vc.r-m10*10.;vec3 bs=mt<.5?vec3(.6,.6,.62):(mt<1.5?vec3(.32,.19,.14):(mt<2.5?vec3(.27,.3,.2):vec3(.42,.4,.38)));float st=n(vec2(wp.y*3.2+n(wp.xz*.8)*2.5,(wp.x+wp.z)*.25)),gr=n(wp.xz*12.+wp.y*9.),cr=n(wp.xz*3.1+wp.y*2.3);al=bs*(.62+.55*st)*(.8+.35*gr)*(.8+.3*l2)*(.75+.5*smoothstep(.2,.8,cr));if(mt>.5&&mt<1.5)al=mix(al,vec3(.72,.34,.12),smoothstep(.6,.68,n(wp.xz*6.+wp.y*5.))*.85);if(mt>1.5&&mt<2.5)al=mix(al,vec3(.88,.82,.16),smoothstep(.52,.62,n(wp.xz*3.5+wp.y*4.))*.9);if(mt<.5)al=mix(al,vec3(.2,.38,.12),smoothstep(.55,.85,N.y)*smoothstep(.35,.7,n(wp.xz*2.))*.55);}"
+  "vec3 L=normalize(sd);float dl=dot(N,L),dif=fo?(max(dl,0.)+.25*max(-dl,0.)):max(dl,0.),hm=.5+.5*N.y,si=clamp(L.y*2.5+.2,0.,1.),nt=1.-clamp(L.y*4.+.6,0.,1.);"
+  "float g=n(wp.xz*5.+wp.y*3.)*.55+n(wp.xz*19.+wp.y*11.)*.45;c=al*(fo?.8+.3*g:(rk?1.:.72+.56*g));float sh=1.;if(ss>.5)sh=shw(.0012+.004*(1.-dif));c*=(.22+.3*hm)*mix(vec3(.9,.95,1.1),vec3(.5,.65,1.25),nt)*mix(lit,.62,nt)+si*dif*sh*vec3(.95,.88,.72)+vec3(.45,.55,.95)*.5*max(-dl,0.)*nt;}"
+  "else if(tx<1.5){vec2 p=wp.xz;float big=n(p*.08),mid=n(p*.6),fine=n(p*3.)*.5+n(p*13.)*.5;float gr=smoothstep(1.3,1.7,vc.g/(vc.r+.001)),sa=smoothstep(1.04,1.1,vc.r/(vc.g+.001))*smoothstep(1.2,1.35,vc.g/(vc.b+.001));c*=.7+.55*(mid*.35+fine*.65);c=mix(c,c*vec3(1.35,1.1,.55),gr*smoothstep(.45,.8,big));c=mix(c,c*vec3(.62,.78,.62),gr*(1.-smoothstep(.2,.55,mid))*.6);c=mix(c,c*(.88+.24*sin(p.x*2.3+p.y*1.4+n(p*.7)*6.)),sa);float nt=1.-clamp(normalize(sd).y*4.+.6,0.,1.);c*=mix(lit,.62,nt)*mix(vec3(1.),vec3(.55,.7,1.25),nt);if(ss>.5)c*=1.-(1.-shw(.004))*.45*clamp(sd.y*2.5+.2,0.,1.);}"
+  "else if(tx<2.5){vec2 p=wp.xz;float dp=vc.r,e=.25,fd=1.-smoothstep(25.,90.,d),h0=wv(p),hx=wv(p+vec2(e,0.)),hz=wv(p+vec2(0.,e));vec3 N=normalize(vec3((h0-hx)*2.*fd,1.,(h0-hz)*2.*fd)),V=normalize(ey-wp),L=normalize(sd);float nt=1.-clamp(L.y*4.+.6,0.,1.),fr=pow(1.-max(dot(N,V),0.),4.);"
+  "vec3 base=mix(mix(vec3(.3,.78,.72),vec3(.08,.5,.72),clamp(dp/1.5,0.,1.)),vec3(.03,.22,.5),clamp((dp-1.5)/3.,0.,1.));vec3 Ls=L.y>0.?L:-L;float sp=pow(max(dot(reflect(-V,N),Ls),0.),140.);"
+  "c=mix(base,fog*1.08,clamp(fr*.9+.1,0.,1.))+sp*mix(vec3(1.,.95,.8)*3.,vec3(.7,.8,1.)*1.2,nt)*clamp(Ls.y*3.,0.,1.);c*=mix(.5+.5*lit,.5,nt)*mix(vec3(1.),vec3(.6,.75,1.2),nt);"
+  "float fm=1.-smoothstep(0.,.6,dp+(n(p*1.3+tm*.15)-.5)*.7);fm=clamp(fm*(.55+.45*sin(dp*10.-tm*1.8+n(p*.8)*5.)),0.,1.)*step(-.3,dp);c=mix(c,vec3(.95,.98,1.)*mix(.6+.4*lit,.55,nt),fm);a=max(clamp(.4+dp*.45,.4,.97),fm);}"
+  "else if(tx>5.5){c=vc;}"
+  "else if(tx>4.5){vec2 q=(vc.xy-.5)*2.;float r2=dot(q,q);if(r2>1.)discard;vec3 V=normalize(ey-wp),Vh=normalize(vec3(V.x,0.,V.z)),Rt=vec3(Vh.z,0.,-Vh.x),L=normalize(sd);float s2=vc.z*17.,f=n(q*2.5+s2)*.5+n(q*6.+s2)*.3+n(q*14.)*.2,zz=sqrt(max(1.-r2,0.));vec3 Nn=normalize(Rt*q.x+vec3(0.,q.y,0.)+Vh*zz+(f-.5)*.35);float dl=dot(Nn,L),nt=1.-clamp(L.y*4.+.6,0.,1.);"
+  "a=smoothstep(0.,.45,(1.-sqrt(r2))*(.6+f*1.1));vec3 lc=mix(vec3(.55,.62,.8),vec3(1.,.98,.94),smoothstep(-.35,.5,dl));float rim=pow(1.-zz,3.)*max(dl,0.)*.5;c=(lc+rim)*mix(.35+.65*lit,.5,nt)*mix(vec3(1.),vec3(.6,.7,1.15),nt);}"
+  "else if(tx>3.5){vec2 q=(vc.xy-.5)*2.;float r=length(q);vec3 tn=mix(vec3(1.,.93,.75),vec3(.72,.82,1.),vc.z);c=(tn*(exp(-r*6.)*.55+exp(-r*18.)*.8)+vec3(1.,1.,.96)*(1.-smoothstep(.055,.075,r))*1.6)*mix(1.,.6,vc.z);}"
   "float ff=tx>3.5?0.:clamp(d/110.,0.,1.);gl_FragColor=vec4(mix(c,fog,ff),a);}";
 
 EM_JS(void, shfail, (const char* s), { alert('Shader error:\n' + UTF8ToString(s)); });
@@ -64,6 +69,7 @@ static float hgt(float x, float z) {   // island with irregular coast, hills, te
   float e = pn(x*.015f, z*.015f)*.6f + pn(x*.04f+9, z*.04f)*.3f + pn(x*.13f, z*.13f+4)*.1f, m = 1 - hypotf(x, z)/rr;
   float h = (e - .3f)*16*fminf(fmaxf(m*3, 0.f), 1.f) + m*6 - 1;
   if (h > 2.f) { float t = h/2.6f, fl = floorf(t), w = fminf(1.f, fmaxf(0.f, (pn(x*.03f+3, z*.03f) - .5f)*6.f)); h += ((fl + fminf(1.f, fmaxf(0.f, (t - fl - .6f)*2.5f)))*2.6f - h)*w; }
+  if (h < -.2f) h = -.2f + (h + .2f)*3.f;
   return h;
 }
 static float rnd() { rs = rs * 1664525u + 1013904223u; return (rs >> 8) / 16777216.f; }
@@ -114,7 +120,7 @@ static void act() {
   }
   Node* best = 0; float bd = 4.5f;
   for (auto& n : nodes) {
-    if (n.hp <= 0) continue;
+    if (n.hp <= 0 || n.type == 2) continue;
     float dx = n.x-px, dz = n.z-pz, d = sqrtf(dx*dx + dz*dz);
     if (d < bd && dx*fx + dz*fz > .6f*d) { bd = d; best = &n; }
   }
@@ -148,7 +154,7 @@ static void update(float dt) {
   float fx = -sinf(yaw), fz = -cosf(yaw), rx = cosf(yaw), rz = -sinf(yaw), sp = 5.f*(hypotf(sx, sy) > .95f ? 1.4f : 1.f);
   float ox = px, oz = pz; px += (fx*-sy + rx*sx)*sp*dt; pz += (fz*-sy + rz*sx)*sp*dt;
   for (auto& n : nodes) {
-    if (n.hp > 0) { float r = n.type == 0 || n.type == 4 ? .9f : n.type == 1 || n.type >= 5 ? 1.3f : .5f; push(px, pz, n.x-r, n.z-r, n.x+r, n.z+r); }
+    if (n.hp > 0) { float r = n.type == 0 || n.type == 4 ? .9f : n.type == 1 || n.type >= 5 ? 1.3f : .5f; if (n.type != 2) push(px, pz, n.x-r, n.z-r, n.x+r, n.z+r); }
     else if ((n.t -= dt) <= 0) n.hp = n.type == 0 ? 5 : n.type == 1 || n.type >= 5 ? 7 : n.type == 3 ? 4 : n.type == 4 ? 5 : 1;
   }
   for (auto& b : blks) if (b.wall) push(px, pz, b.x-b.w/2, b.z-b.d/2, b.x+b.w/2, b.z+b.d/2);
@@ -265,9 +271,14 @@ static void oak(float x, float y, float z, float sc, int seed, int lod) {
   }
   crown(x, y + 5.8f*sc, z, 2.4f*sc, lod ? 20 : 6, seed + 41, 0);
 }
-static void bush(float x, float y, float z, int seed, int lod) {   // dense leafy bush with twigs, no berries
-  if (lod) for (int q = 0; q < 3; q++) { float a = q*2.1f + vn(seed, q); seg(x, y, z, x + cosf(a)*.6f, y + .7f, z + sinf(a)*.6f, .05f, .025f, .32f, .22f, .12f); }
-  crown(x, y + .75f, z, 1.15f, lod ? 18 : 8, seed, 2); crown(x + .3f, y + .5f, z - .2f, .8f, lod ? 8 : 3, seed + 17, 2);
+static void bush(float x, float y, float z, int seed, int lod) {   // two kinds: wide mound / taller shrub
+  if (lod) for (int q = 0; q < 4; q++) { float a = q*1.57f + vn(seed, q); seg(x, y, z, x + cosf(a)*.9f, y + .9f, z + sinf(a)*.9f, .05f, .025f, .32f, .22f, .12f); }
+  if (seed & 1) {
+    crown(x, y + .95f, z, 1.9f, lod ? 36 : 14, seed, 2); crown(x + .6f, y + .6f, z - .4f, 1.3f, lod ? 18 : 6, seed + 17, 2);
+    crown(x - .7f, y + .55f, z + .5f, 1.2f, lod ? 16 : 5, seed + 29, 2); crown(x, y + .35f, z, 1.4f, lod ? 14 : 4, seed + 3, 2);
+  } else {
+    crown(x, y + 1.5f, z, 1.2f, lod ? 26 : 10, seed, 2); crown(x + .15f, y + 2.4f, z, .85f, lod ? 14 : 5, seed + 7, 2); crown(x, y + .8f, z, 1.5f, lod ? 18 : 6, seed + 13, 2);
+  }
 }
 static void water() {
   auto W3 = [&](int i, int j) { vb.push_back({TX0 + i*5.f, -.2f, TZ0 + j*5.f, -.2f - TH[i][j], 0, 0}); };
@@ -276,7 +287,7 @@ static void water() {
     W3(i,j); W3(i+1,j); W3(i+1,j+1); W3(i,j); W3(i+1,j+1); W3(i,j+1);
   }
 }
-static void rock(float x, float y, float z, float s, float r, float g, float b) {   // jittered icosahedron boulder
+static void rock(float x, float y, float z, float s, float r, float g, float b, int mat = 3) {   // boulder; material id goes to the shader in the vertex colour
   static const float T = 1.618f, IV[12][3] = {{-1,T,0},{1,T,0},{-1,-T,0},{1,-T,0},{0,-1,T},{0,1,T},{0,-1,-T},{0,1,-T},{T,0,-1},{T,0,1},{-T,0,-1},{-T,0,1}};
   static const int IF[20][3] = {{0,11,5},{0,5,1},{0,1,7},{0,7,10},{0,10,11},{1,5,9},{5,11,4},{11,10,2},{10,7,6},{7,1,8},{3,9,4},{3,4,2},{3,2,6},{3,6,8},{3,8,9},{4,9,5},{2,4,11},{6,2,10},{8,6,7},{9,8,1}};
   float P[12][3];
@@ -284,12 +295,10 @@ static void rock(float x, float y, float z, float s, float r, float g, float b) 
     float L = sqrtf(IV[i][0]*IV[i][0] + IV[i][1]*IV[i][1] + IV[i][2]*IV[i][2]), j = .75f + .5f*vn((int)(x*13) + i*31, (int)(z*13) + i*17);
     P[i][0] = x + IV[i][0]/L*s*j; P[i][1] = y + .15f*s + IV[i][1]/L*s*j*.7f; P[i][2] = z + IV[i][2]/L*s*j;
   }
-  for (int f = 0; f < 20; f++) { float l = .8f + .2f*vn(f, (int)(x*7)); for (int k = 0; k < 3; k++) tv(P[IF[f][k]][0], P[IF[f][k]][1], P[IF[f][k]][2], r*l, g*l, b*l); }
+  for (int f = 0; f < 20; f++) { float l = .8f + .2f*vn(f, (int)(x*7)); for (int k = 0; k < 3; k++) tv(P[IF[f][k]][0], P[IF[f][k]][1], P[IF[f][k]][2], 10.f*(mat+1) + l, 0, 0); }
 }
 static void ore(float x, float y, float z, int t) {   // 0 stone, 1 metal, 2 sulfur
-  static const float C[3][3] = {{.64f,.64f,.66f},{.34f,.21f,.17f},{.3f,.32f,.24f}}, Kc[3][3] = {{.86f,.87f,.92f},{.66f,.32f,.12f},{.9f,.84f,.14f}};
-  rock(x, y, z, 1.6f, C[t][0], C[t][1], C[t][2]); rock(x + .9f, y, z + .5f, 1.f, C[t][0]*.88f, C[t][1]*.88f, C[t][2]*.88f);
-  for (int i = 0; i < 5; i++) { float a = i*1.3f + vn((int)x, i)*2.f, r = .3f + .8f*vn(i, (int)z); cone(x + cosf(a)*r, y + 1.1f + .5f*vn(i, 7), z + sinf(a)*r, .2f, .75f, Kc[t][0], Kc[t][1], Kc[t][2]); }
+  rock(x, y, z, 1.7f, 0, 0, 0, t); rock(x + 1.1f, y, z + .5f, 1.05f, 0, 0, 0, t); rock(x - .6f, y, z - .9f, .8f, 0, 0, 0, t);
 }
 static void lightMat(float* LM, float lx, float ly, float lz) {   // orthographic sun view around the player
   ly = fmaxf(ly, .25f); float ll = sqrtf(lx*lx + ly*ly + lz*lz); lx /= ll; ly /= ll; lz /= ll;
@@ -337,7 +346,7 @@ static void scene() {
   for (auto& b : blks) { if (b.wall) box(b.x,b.y-1.2f,b.z,b.w,4.2f,b.d,.6f,.42f,.22f); else box(b.x,b.y-1.2f,b.z,b.w,1.5f,b.d,.5f,.35f,.18f); }
 }
 static void render(float dt) {
-  float k = fminf(fmaxf(sinf(tod*6.2832f)*2 + .5f, .06f), 1.f), sky[3] = {.66f*k, .8f*k, .95f*k}, top[3] = {.2f*k, .42f*k, .85f*k};
+  float k = fminf(fmaxf(sinf(tod*6.2832f)*2 + .5f, .06f), 1.f), dyf = fminf(fmaxf((k - .06f)/.94f, 0.f), 1.f), wm = fmaxf(0.f, 1.f - fabsf(sinf(tod*6.2832f))*6.f), sky[3] = {.07f + .59f*dyf + .3f*wm, .1f + .7f*dyf + .12f*wm, .2f + .75f*dyf - .05f*wm}, top[3] = {.01f + .19f*dyf, .02f + .4f*dyf, .07f + .78f*dyf};
   glViewport(0, 0, W, H); glClearColor(sky[0]*.7f, sky[1]*.82f, sky[2]*.98f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
   float a = (float)W/H, f = 1/tanf(.55f), n = .1f, fa = 400.f;
   float P[16] = {f/a,0,0,0, 0,f,0,0, 0,0,(fa+n)/(n-fa),-1, 0,0,2*fa*n/(n-fa),0};
@@ -356,22 +365,42 @@ static void render(float dt) {
     glDisable(GL_DEPTH_TEST); txOn = 3; flush(I0, sky, 1);
     float th = tod*6.2832f, sn = sinf(th), cs = cosf(th), sd[3] = {.62f*cs, sn, -.78f*cs};
     glUniform3f(uSd, sd[0], sd[1], sd[2]); glUniform3f(uEy, px, py + 1.7f, pz); glUniform1f(uTm, tt);
-    float kk = .25f + .75f*k, haze[3] = {sky[0]*.62f + .08f*kk, sky[1]*.66f + .12f*kk, sky[2]*.7f + .14f*kk};
-    const float IS[4][2] = {{210, -90}, {-230, -60}, {90, -250}, {-110, 230}};
-    for (int i = 0; i < 4; i++) { float ix = IS[i][0], iz = IS[i][1], R0 = 34 + 10*i; cone(ix, -.2f, iz, R0, 16 + 5*i, haze[0], haze[1], haze[2]); cone(ix + R0*.6f, -.2f, iz + R0*.2f, R0*.6f, 11 + 3*i, haze[0], haze[1], haze[2]); }
-    flush(A, haze, 1);
-    if (sn > -.06f) {
-      float R0 = 75.f; quadUV(px + sd[0]*100, py + 1.7f + sn*100, pz + sd[2]*100, .78f*R0, 0, .62f*R0, -.62f*sn*R0, .993f*cs*R0, .78f*sn*R0, 0);
-      txOn = 4; glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE); flush(A, sky, 1); glDisable(GL_BLEND); txOn = 3;
+    glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE);
+    float night = fminf(fmaxf(.5f - sn*3.f, 0.f), 1.f);
+    if (night > .02f) {
+      for (int i = 0; i < 170; i++) {
+        float a = vn(i, 11)*6.2832f, e = .06f + 1.45f*vn(11, i), qx = cosf(a)*cosf(e), qy = sinf(e), qz = sinf(a)*cosf(e), s0 = .5f + .9f*vn(i, 12), br = night*(.35f + .65f*vn(i, 13));
+        float t1x = -qz, t1z = qx, tl = sqrtf(t1x*t1x + t1z*t1z) + 1e-4f; t1x /= tl; t1z /= tl;
+        float t2x = qy*t1z, t2y = qz*t1x - qx*t1z, t2z = -qy*t1x, X = px + qx*300, Y = py + 1.7f + qy*300, Z = pz + qz*300;
+        tv(X + t1x*s0*1.6f, Y, Z + t1z*s0*1.6f, br, br, br*1.1f);
+        tv(X - t1x*s0*.8f + t2x*s0*1.4f, Y + t2y*s0*1.4f, Z - t1z*s0*.8f + t2z*s0*1.4f, br, br, br*1.1f);
+        tv(X - t1x*s0*.8f - t2x*s0*1.4f, Y - t2y*s0*1.4f, Z - t1z*s0*.8f - t2z*s0*1.4f, br, br, br*1.1f);
+      }
+      txOn = 6; flush(A, sky, 1);
     }
-    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); txOn = 5;
-    for (int i = 0; i < 16; i++) {
-      float x = fmodf((vn(i, 1) - .5f)*300 + tt*2.5f - px + 1000.f, 300.f) - 150.f, z = fmodf((vn(i, 2) - .5f)*300 - pz + 1000.f, 300.f) - 150.f;
-      if (x*x + z*z > 14400) continue;
-      float hw = 24 + 16*vn(i, 3), hh = 9 + 6*vn(i, 4);
-      quadUV(px + x, 60 + vn(i, 5)*30, pz + z, cosf(yaw)*hw, 0, -sinf(yaw)*hw, 0, hh, 0, vn(i, 6));
+    auto body = [&](const float* md, float R0, float tint) {
+      quadUV(px + md[0]*100, py + 1.7f + md[1]*100, pz + md[2]*100, .78f*R0, 0, .62f*R0, -.62f*md[1]*R0, -(.78f*md[2] - .62f*md[0])*R0, .78f*md[1]*R0, tint);
+    };
+    float md[3] = {-sd[0], -sd[1], -sd[2]};
+    if (sn > -.06f) body(sd, 75.f, 0.f);
+    if (md[1] > -.06f) body(md, 40.f, 1.f);
+    txOn = 4; flush(A, sky, 1); glDisable(GL_BLEND);
+    struct Pf { float x, y, z, R, e, d; };
+    static vector<Pf> pf; pf.clear();
+    for (int i = 0; i < 9; i++) {
+      float cx0 = fmodf((vn(i, 1) - .5f)*300 + tt*2.2f - px + 1000.f, 300.f) - 150.f, cz0 = fmodf((vn(i, 2) - .5f)*300 - pz + 1000.f, 300.f) - 150.f;
+      if (cx0*cx0 + cz0*cz0 > 15000) continue;
+      float ca = vn(i, 7)*3.14f, W0 = 16 + 10*vn(i, 3), H0 = 6 + 4*vn(i, 4), cy0 = 55 + vn(i, 5)*35, Rb = 12 + 6*vn(i, 6);
+      for (int j = 0; j < 8; j++) {
+        float t = j < 6 ? j/2.5f - 1.f : (j - 6)*.7f - .35f, up2 = j < 6 ? (1.f - t*t)*H0*.6f : H0*.9f;
+        float X = px + cx0 + cosf(ca)*t*W0, Z = pz + cz0 + sinf(ca)*t*W0, Y = cy0 + up2 + vn(i*8 + j, 9)*2.f;
+        float R = Rb*(.55f + .45f*(1.f - fabsf(t)) + .25f*vn(i*8 + j, 10))*(j > 5 ? .75f : 1.f);
+        pf.push_back({X, Y, Z, R, vn(i*8 + j, 11), (X-px)*(X-px) + (Z-pz)*(Z-pz) + (Y-py)*(Y-py)});
+      }
     }
-    flush(A, sky, lt); glDisable(GL_BLEND); txOn = 3;
+    sort(pf.begin(), pf.end(), [](const Pf& p1, const Pf& p2) { return p1.d > p2.d; });
+    for (const auto& q : pf) quadUV(q.x, q.y, q.z, cosf(yaw)*q.R, 0, -sinf(yaw)*q.R, 0, q.R, 0, q.e);
+    txOn = 5; glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); flush(A, sky, lt); glDisable(GL_BLEND); txOn = 3;
     glEnable(GL_DEPTH_TEST); txOn = 1;
   }
   vb.clear(); scene(); sv.swap(vb);
@@ -423,7 +452,7 @@ int main() {
   {
     const char* svs = "attribute vec3 p;attribute vec3 c;uniform mat4 lm;varying float z;varying vec3 vc;void main(){gl_Position=lm*vec4(p,1.);z=gl_Position.z*.5+.5;vc=c;}";
     const char* sfs = "precision highp float;varying float z;varying vec3 vc;"
-      "float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}"
+      "float h(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}"
       "float lf(vec2 q){vec2 i=floor(q),f=fract(q)-.5;float a=h(i)*6.283;f+=(vec2(h(i+7.),h(i+13.))-.5)*.3;vec2 r=vec2(cos(a)*f.x+sin(a)*f.y,-sin(a)*f.x+cos(a)*f.y);return 1.-step(1.,length(r/vec2(.52,.24)));}float lfm(vec2 u){return max(lf(u*5.),lf(u*6.+3.1))*step(length(u-.5),.5);}"
       "void main(){if(vc.b>1.5&&lfm(vc.xy)<.5)discard;vec4 e=fract(z*vec4(1.,255.,65025.,16581375.));e-=e.yzww*vec4(1./255.,1./255.,1./255.,0.);gl_FragColor=e;}";
     shProg = glCreateProgram(); glAttachShader(shProg, sh(GL_VERTEX_SHADER, svs)); glAttachShader(shProg, sh(GL_FRAGMENT_SHADER, sfs));
