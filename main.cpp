@@ -17,11 +17,12 @@ static vector<V> vb; static vector<Node> nodes; static vector<Blk> blks;
 static GLint uM, uFog, uLit, uTx, uSd, uEy, uTm, uLm, uSm, uSs, uShLm; static GLuint prog, shProg, shFbo, shTex; static bool shOk = false; static vector<V> sv; static float txOn = 1; static int W = 0, H = 0; static float K = 1;
 static float px = 0, py = 0, pz = 0, vy = 0, yaw = 0, pitch = 0, hp = 100, food = 100;
 static float tod = .1f, cd = 0, hudT = 0, msgT = 0; static int wood = 60, stone = 0, metal = 0, sulfur = 0, mode = 0; static float thirst = 100;
-static char msg[96] = ""; static Fin st = {-1}, lk = {-1};
+static char msg[96] = ""; static bool inBush = false; static Fin st = {-1}, lk = {-1};
 static double last = 0; static unsigned rs = 12345;
 
 EM_JS(int, gk, (int i), { var v = window.G[i] | 0; if (i == 1) window.G[1] = 0; return v; });
 EM_JS(float, gf, (int i), { var v = window.G[i] || 0; if (i > 4) window.G[i] = 0; return v; });
+EM_JS(void, aud, (int sf, int sp, int bu, float td, int jm), { if (window.audioState) window.audioState(sf, sp, bu, td, jm); });
 EM_JS(void, hud, (const char* s), { if (window.hudUpdate) window.hudUpdate(UTF8ToString(s)); });
 
 static const char* VS = "attribute vec3 p;attribute vec3 c;uniform mat4 m;uniform mat4 lm;uniform float tx;uniform float tm;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;"
@@ -40,7 +41,7 @@ static const char* FS = "#extension GL_OES_standard_derivatives : enable\n"
   "if(fo){if(lfm(vc.xy)<.5)discard;float k=vc.b-2.,pl=floor(k+.01),t=(k-pl)/.99;vec3 a0,a1;if(pl<.5){a0=vec3(.07,.2,.05);a1=vec3(.45,.62,.14);}else if(pl<1.5){a0=vec3(.04,.14,.08);a1=vec3(.2,.42,.2);}else if(pl<2.5){a0=vec3(.1,.2,.05);a1=vec3(.38,.52,.14);}else if(pl<3.5){a0=vec3(.03,.11,.08);a1=vec3(.14,.3,.2);}else if(pl<4.5){a0=vec3(.08,.18,.07);a1=vec3(.26,.4,.16);}else{a0=vec3(.3,.26,.1);a1=vec3(.62,.55,.26);}al=mix(a0,a1,t)*(.85+.3*h(floor(vc.xy*5.)));if(pl>2.5&&pl<4.5)al=mix(al,vec3(.93,.96,1.),smoothstep(.15,.65,N.y)*.9);}"
   "if(rk){float m10=floor(vc.r/10.),mt=m10-1.,sn=0.;if(mt>7.5){mt-=8.;sn=1.;}vec3 bs=mt<.5?vec3(.62,.62,.64):(mt<1.5?vec3(.3,.2,.16):(mt<2.5?vec3(.2,.22,.17):(mt<3.5?vec3(.42,.4,.38):(mt<4.5?vec3(.2,.42,.16):(mt<5.5?vec3(.05,.15,.05):(mt<6.5?vec3(.08,.18,.07):vec3(.3,.26,.12)))))));"
   "float st=n(vec2(wp.y*5.+n(wp.xz*1.1)*3.,(wp.x+wp.z)*.35)),gr=n(wp.xz*16.+wp.y*13.),vz=abs(n(wp.xz*2.4+wp.y*2.1)-.5),vein=1.-smoothstep(0.,.05,vz);al=bs*(.7+.45*st)*(.82+.3*gr);"
-  "if(mt<.5){al=mix(al,vec3(.35,.36,.4),vein*.7);al=mix(al,vec3(.9,.9,.92),smoothstep(.72,.8,n(wp.xz*9.+wp.y*8.))*.5);al=mix(al,vec3(.2,.36,.12),smoothstep(.62,.9,N.y)*smoothstep(.5,.7,n(wp.xz*5.))*.4*(1.-sn));}else if(mt<1.5){al=mix(al,vec3(.12,.07,.06),vein*.7);al=mix(al,vec3(.8,.4,.14),smoothstep(.66,.72,n(wp.xz*10.+wp.y*9.))*.85);}else if(mt<2.5){al=mix(al,vec3(.88,.82,.16),vein*.95);al=mix(al,vec3(.8,.78,.2),smoothstep(.7,.76,n(wp.xz*8.+wp.y*7.))*.6);}else if(mt>3.5&&mt<4.5){al*=.8+.2*sin((wp.x+wp.z)*16.)+.2*h(floor(wp.xz*11.+wp.y*7.));}"
+  "if(mt<.5){al=mix(al,vec3(.35,.36,.4),vein*.7);al=mix(al,vec3(.9,.9,.92),smoothstep(.72,.8,n(wp.xz*9.+wp.y*8.))*.5);al=mix(al,vec3(.2,.36,.12),smoothstep(.62,.9,N.y)*smoothstep(.5,.7,n(wp.xz*5.))*.4*(1.-sn));}else if(mt<1.5){al=mix(al,vec3(.12,.07,.06),vein*.7);al=mix(al,vec3(.8,.4,.14),smoothstep(.66,.72,n(wp.xz*10.+wp.y*9.))*.85);}else if(mt<2.5){al=mix(al,vec3(.88,.82,.16),vein*.95);al=mix(al,vec3(.8,.78,.2),smoothstep(.7,.76,n(wp.xz*8.+wp.y*7.))*.6);}else if(mt>3.5&&mt<4.5){al*=.78+.3*abs(sin(vc.g*50.27))+.15*h(floor(wp.xz*11.+wp.y*7.));}"
   "if(mt>5.5&&mt<6.5)sn=1.;if(sn>.5)al=mix(al,vec3(.93,.96,1.),smoothstep(.3,.7,N.y)*.92);}"
   "vec3 L=normalize(sd);float dl=dot(N,L),dif=fo?(max(dl,0.)+.25*max(-dl,0.)):max(dl,0.),hm=.5+.5*N.y,si=clamp(L.y*2.5+.2,0.,1.),nt=1.-clamp(L.y*4.+.6,0.,1.);"
   "float g=n(wp.xz*5.+wp.y*3.)*.55+n(wp.xz*19.+wp.y*11.)*.45;c=al*(fo?.8+.3*g:(rk?1.:.72+.56*g));float sh=1.;if(ss>.5)sh=shw(.0012+.004*(1.-dif));c*=(.22+.3*hm)*mix(vec3(.9,.95,1.1),vec3(.5,.65,1.25),nt)*mix(lit,.62,nt)+si*dif*sh*vec3(.95,.88,.72)+vec3(.45,.55,.95)*.5*max(-dl,0.)*nt;}"
@@ -86,10 +87,33 @@ static float hgt(float x, float z) {   // island radius ~330: irregular coast, h
   float h = (e - .3f)*16*fminf(fmaxf(dc/33.f, 0.f), 1.f) + fminf(fmaxf(dc, -60.f), 120.f)*.06f - 1.f;
   h += fmaxf(0.f, pn(x*.005f + 50, z*.005f) - .55f)*70.f*fminf(fmaxf((dc - 60.f)/120.f, 0.f), 1.f)*fminf(fmaxf((r - 40.f)/80.f, 0.f), 1.f);
   float cl = fminf(1.f, fmaxf(0.f, (pn(cu*2.3f + 11, su*2.3f + 11) - .48f)*7.f));
-  if (cl > 0.f) { float top = 9.f + 12.f*pn(x*.012f, z*.012f + 7); h = fmaxf(h, h + (top - h)*cl*fminf(1.f, fmaxf(0.f, dc/16.f))); }
+  if (cl > 0.f) { float top = 9.f + 12.f*pn(x*.012f, z*.012f + 7); h = fmaxf(h, h + (top - h)*cl*fminf(1.f, fmaxf(0.f, (dc - 14.f)/18.f))); }
   if (h > 2.f) { float t = h/2.6f, fl = floorf(t), w = fminf(1.f, fmaxf(0.f, (pn(x*.03f+3, z*.03f) - .5f)*6.f)); h += ((fl + fminf(1.f, fmaxf(0.f, (t - fl - .6f)*2.5f)))*2.6f - h)*w; }
   if (h < -.2f) h = -.2f + (h + .2f)*3.f;
   return h;
+}
+static float meshH(float x, float z, float* slope = 0) {   // height of the rendered terrain triangle at (x,z)
+  float fx = x/5.f, fz = z/5.f; int gx = (int)floorf(fx), gz = (int)floorf(fz); float u = fx - gx, v = fz - gz;
+  float h00 = hgt(gx*5.f, gz*5.f), h10 = hgt((gx+1)*5.f, gz*5.f), h01 = hgt(gx*5.f, (gz+1)*5.f), h11 = hgt((gx+1)*5.f, (gz+1)*5.f), h, sx, sz;
+  if (u >= v) { h = h00 + (h10 - h00)*u + (h11 - h10)*v; sx = (h10 - h00)/5.f; sz = (h11 - h10)/5.f; }
+  else { h = h00 + (h11 - h01)*u + (h01 - h00)*v; sx = (h11 - h01)/5.f; sz = (h01 - h00)/5.f; }
+  if (slope) *slope = sqrtf(sx*sx + sz*sz);
+  return h;
+}
+EM_JS(void, mapImg, (const unsigned char* p, int m), { var c = document.createElement('canvas'); c.width = c.height = m; var g = c.getContext('2d'), d = g.createImageData(m, m); d.data.set(HEAPU8.subarray(p, p + m*m*4)); g.putImageData(d, 0, 0); window.mapCanvas = c; });
+static void genMap() {   // whole island, 880x880 units, hill-shaded, coloured by height and biome
+  const int M = 256; static unsigned char img[M*M*4]; const float E = 440.f;
+  for (int j = 0; j < M; j++) for (int i = 0; i < M; i++) {
+    float x = (i/(M - 1.f)*2 - 1)*E, z = (j/(M - 1.f)*2 - 1)*E, h = hgt(x, z), bio = biomeAt(x, z), r, g, b;
+    if (h < -.2f) { float t = fminf(1.f, (-.2f - h)/4); r = .2f - .15f*t; g = .5f - .3f*t; b = .75f - .2f*t; }
+    else if (h < 1.6f) { r = .85f; g = .78f; b = .55f; }
+    else if (bio > 1.5f) { r = .93f; g = .96f; b = 1.f; }
+    else if (bio > .5f) { r = .85f; g = .65f; b = .38f; }
+    else { float t = fminf(1.f, h/18.f); r = .25f + .35f*t; g = .5f - .05f*t; b = .2f + .25f*t; }
+    float sh = 1.f + fmaxf(-.4f, fminf(.4f, (hgt(x + 4, z) - h)*.1f)); if (h < -.2f) sh = 1.f;
+    unsigned char* q = img + (j*M + i)*4; q[0] = (unsigned char)fminf(255.f, r*sh*255); q[1] = (unsigned char)fminf(255.f, g*sh*255); q[2] = (unsigned char)fminf(255.f, b*sh*255); q[3] = 255;
+  }
+  mapImg(img, M);
 }
 static float rnd() { rs = rs * 1664525u + 1013904223u; return (rs >> 8) / 16777216.f; }
 static void mul(float* o, const float* a, const float* b) {
@@ -126,7 +150,7 @@ static Blk ghost() {
   float fx = -sinf(yaw), fz = -cosf(yaw);
   Blk b = {roundf((px+fx*5)/4)*4, roundf((pz+fz*5)/4)*4, 4, 4, mode == 2};
   if (b.wall) { if (fabsf(fx) > fabsf(fz)) { b.x += fx > 0 ? 2 : -2; b.w = .4f; } else { b.z += fz > 0 ? 2 : -2; b.d = .4f; } }
-  b.y = hgt(b.x, b.z);
+  b.y = meshH(b.x, b.z);
   return b;
 }
 static void act() {
@@ -164,7 +188,7 @@ static EM_BOOL tc(int type, const EmscriptenTouchEvent* e, void*) {
   return EM_TRUE;
 }
 static void update(float dt) {
-  tod += dt/240; if (tod > 1) tod -= 1; cd -= dt; msgT -= dt;
+  inBush = false; static bool mapDone = false; if (!mapDone && gk(7)) { genMap(); mapDone = true; } tod += dt/240; if (tod > 1) tod -= 1; cd -= dt; msgT -= dt;
   food -= dt*.4f; thirst = fmaxf(0.f, thirst - dt*.55f);
   if (food <= 0 || thirst <= 0) { food = fmaxf(food, 0.f); hp -= dt*2; } else if (food > 50 && thirst > 50 && hp < 100) hp = fminf(100, hp + dt*2);
   if (hp <= 0) { hp = 100; food = 100; thirst = 100; wood = stone = metal = sulfur = 0; px = pz = 0; say("Ты умер. Ресурсы потеряны"); }
@@ -173,14 +197,15 @@ static void update(float dt) {
   float fx = -sinf(yaw), fz = -cosf(yaw), rx = cosf(yaw), rz = -sinf(yaw), sp = 5.f*(hypotf(sx, sy) > .95f ? 1.4f : 1.f);
   float ox = px, oz = pz; px += (fx*-sy + rx*sx)*sp*dt; pz += (fz*-sy + rz*sx)*sp*dt;
   for (auto& n : nodes) {
-    if (n.hp > 0) { float r = n.type == 0 || n.type == 4 || n.type == 7 ? .9f : n.type == 1 || n.type == 5 || n.type == 6 ? 1.3f : n.type == 9 ? .6f : .5f; if (n.type != 2 && n.type != 8 && n.type != 10) push(px, pz, n.x-r, n.z-r, n.x+r, n.z+r); }
+    if (n.hp > 0) { float r = n.type == 0 || n.type == 4 || n.type == 7 ? .9f : n.type == 1 || n.type == 5 || n.type == 6 ? 1.3f : n.type == 9 ? .6f : .5f; if (n.type != 2 && n.type != 8 && n.type != 10) push(px, pz, n.x-r, n.z-r, n.x+r, n.z+r); else { float bx = px - n.x, bz = pz - n.z; if (bx*bx + bz*bz < 3.5f) inBush = true; } }
     else if ((n.t -= dt) <= 0) n.hp = n.type == 0 || n.type == 7 ? 5 : n.type == 1 || n.type == 5 || n.type == 6 ? 7 : n.type == 3 ? 4 : n.type == 4 ? 5 : n.type == 9 ? 3 : 1;
   }
   for (auto& b : blks) if (b.wall) push(px, pz, b.x-b.w/2, b.z-b.d/2, b.x+b.w/2, b.z+b.d/2);
   if (hgt(px, pz) < -.5f) { px = ox; pz = oz; }
-  float gy = hgt(px, pz); for (auto& b : blks) if (!b.wall && fabsf(px-b.x) < 2 && fabsf(pz-b.z) < 2) gy = fmaxf(gy, b.y + .3f);
-  if (gk(1) && py <= gy + .01f) vy = 7;
+  float gy = meshH(px, pz); for (auto& b : blks) if (!b.wall && fabsf(px-b.x) < 2 && fabsf(pz-b.z) < 2) gy = fmaxf(gy, b.y + .3f);
+  bool jmp = false; if (gk(1) && py <= gy + .01f) { vy = 7; jmp = true; }
   vy -= 20*dt; py += vy*dt; if (py < gy + .25f && vy <= 0) { py = gy; vy = 0; }
+  { float mag = hypotf(sx, sy), b2 = biomeAt(px, pz); bool grd = py <= gy + .05f; aud(b2 > 1.5f ? 2 : (b2 > .5f || gy < 1.6f) ? 1 : 0, (mag > .12f && grd) ? (mag > .95f ? 2 : 1) : 0, inBush ? 1 : 0, tod, jmp ? 1 : 0); }
   mode = gk(2);
   if (gk(0) && cd <= 0) act();
 }
@@ -230,7 +255,7 @@ static void grass(float tt) {   // short dense tufts
     int gx = cx + i, gz = cz + j; if (vn(gx*3+1, gz*5+2) < .2f) continue;
     float x = gx + vn(gx, gz), z = gz + vn(gz+7, gx), dx = x-px, dz = z-pz, d2 = dx*dx + dz*dz;
     if (d2 > 400) continue;
-    float h = hgt(x, z); if (h < 1.5f || biomeAt(x, z) > .3f) continue;
+    float sl, h = meshH(x, z, &sl); if (h < 1.5f || sl > .5f || biomeAt(x, z) > .3f) continue;
     float kind = vn(gx+5, gz+1), s = .22f + .3f*vn(gx+3, gz+9), w = sinf(tt*2 + x*.7f + z*.5f)*.08f*s;
     float cr = .12f, cg = .3f, cb = .07f, tr = .45f, tg = .66f, tb = .2f;
     if (kind < .4f) { cr = .22f; cg = .32f; cb = .09f; tr = .72f; tg = .72f; tb = .27f; }
@@ -328,20 +353,53 @@ static void oak(float x, float y, float z, float sc, int seed, int lod) {
   }
   crown(x, y + 5.8f*sc, z, 2.4f*sc, n, seed + 41, 0, cs);
 }
-static void bush(float x, float y, float z, int seed, int lod, int pal) {   // pal 2 green, 4 snow, 5 dry desert; core blob + surface-aligned leaves
-  float S = 1.f + .35f*vn(seed, 5), cw = lod == 0 ? 1.f : lod == 1 ? 1.5f : 2.1f; int n = lod == 0 ? 48 : lod == 1 ? 24 : 12, cm = pal == 2 ? 5 : pal == 4 ? 6 : 7, cl = lod == 2 ? 0 : 1;
-  if (pal == 5) n = n*2/3;
-  if (seed & 1) { blob(x, y, z, 1.5f*S, .8f*S, 1.3f*S, seed, cm, .15f, cl); shell(x, y + .1f*S, z, 2.1f*S, 1.15f*S, 1.8f*S, n, seed, pal, cw*.8f*S); }
-  else { blob(x, y, z, .9f*S, 1.5f*S, .9f*S, seed, cm, .15f, cl); shell(x, y + .1f*S, z, 1.3f*S, 2.1f*S, 1.3f*S, n, seed, pal, cw*.75f*S); }
+static void bush(float x, float y, float z, int seed, int lod, int pal) {   // two kinds: wide mound / taller shrub (pal 2 green, 4 snow, 5 dry)
+  float cs = lod == 0 ? 1.f : lod == 1 ? 1.4f : 2.f, k = lod == 0 ? 1.f : lod == 1 ? 2.f : 3.f; if (pal == 5) k *= 1.5f;
+  if (lod < 2) for (int q = 0; q < 4; q++) { float a = q*1.57f + vn(seed, q); seg(x, y-.2f, z, x + cosf(a)*.9f, y + .9f, z + sinf(a)*.9f, .05f, .025f, .32f, .22f, .12f); }
+  if (seed & 1) {
+    crown(x, y + .95f, z, 1.9f, (int)(36/k), seed, pal, cs); crown(x + .6f, y + .6f, z - .4f, 1.3f, (int)(18/k), seed + 17, pal, cs);
+    crown(x - .7f, y + .55f, z + .5f, 1.2f, (int)(16/k), seed + 29, pal, cs); crown(x, y + .35f, z, 1.4f, (int)(14/k), seed + 3, pal, cs);
+  } else {
+    crown(x, y + 1.5f, z, 1.2f, (int)(26/k), seed, pal, cs); crown(x + .15f, y + 2.4f, z, .85f, (int)(14/k), seed + 7, pal, cs); crown(x, y + .8f, z, 1.5f, (int)(18/k), seed + 13, pal, cs);
+  }
 }
-static void cactus(float x, float y, float z, int seed, int lod) {   // saguaro / barrel / paddle cactus
-  int k = ((seed % 3) + 3) % 3; float s = 1.f + .4f*vn(seed, 3);
+static void tube(const float* P, const float* Rr, int np, int sides, float mat) {   // swept ring tube along a path (rotation-minimising frames)
+  static float ring[16][12][3]; float u[3] = {0, 0, 0};
+  for (int k = 0; k < np; k++) {
+    int a = k > 0 ? k - 1 : 0, b = k < np - 1 ? k + 1 : k;
+    float t[3] = {P[b*3] - P[a*3], P[b*3+1] - P[a*3+1], P[b*3+2] - P[a*3+2]}, tl = sqrtf(t[0]*t[0] + t[1]*t[1] + t[2]*t[2]) + 1e-6f; for (int i = 0; i < 3; i++) t[i] /= tl;
+    if (k == 0) { float ref[3] = {fabsf(t[1]) > .9f ? 1.f : 0.f, fabsf(t[1]) > .9f ? 0.f : 1.f, 0.f}; u[0] = t[1]*ref[2] - t[2]*ref[1]; u[1] = t[2]*ref[0] - t[0]*ref[2]; u[2] = t[0]*ref[1] - t[1]*ref[0]; }
+    else { float d = u[0]*t[0] + u[1]*t[1] + u[2]*t[2]; for (int i = 0; i < 3; i++) u[i] -= t[i]*d; }
+    float ul = sqrtf(u[0]*u[0] + u[1]*u[1] + u[2]*u[2]) + 1e-6f; for (int i = 0; i < 3; i++) u[i] /= ul;
+    float v[3] = {t[1]*u[2] - t[2]*u[1], t[2]*u[0] - t[0]*u[2], t[0]*u[1] - t[1]*u[0]};
+    for (int s = 0; s < sides; s++) { float an = s*6.2832f/sides, c = cosf(an), sn = sinf(an); for (int i = 0; i < 3; i++) ring[k][s][i] = P[k*3+i] + (u[i]*c + v[i]*sn)*Rr[k]; }
+  }
+  float m = 10.f*(mat + 1) + .9f;
+  for (int k = 0; k < np - 1; k++) for (int s = 0; s < sides; s++) {
+    int s2 = (s + 1) % sides; float g0 = (float)s/sides, g1 = (float)(s + 1)/sides;
+    tv(ring[k][s][0], ring[k][s][1], ring[k][s][2], m, g0, 0); tv(ring[k][s2][0], ring[k][s2][1], ring[k][s2][2], m, g1, 0); tv(ring[k+1][s2][0], ring[k+1][s2][1], ring[k+1][s2][2], m, g1, 0);
+    tv(ring[k][s][0], ring[k][s][1], ring[k][s][2], m, g0, 0); tv(ring[k+1][s2][0], ring[k+1][s2][1], ring[k+1][s2][2], m, g1, 0); tv(ring[k+1][s][0], ring[k+1][s][1], ring[k+1][s][2], m, g0, 0);
+  }
+}
+static void cactus(float x, float y, float z, int seed, int lod) {   // saguaro with curved arms / barrel / paddle cluster
+  int k = ((seed % 3) + 3) % 3, sides = lod == 0 ? 10 : lod == 1 ? 7 : 5; float s = 1.f + .4f*vn(seed, 3), P[16*3], Rr[16];
   if (k == 0) {
-    seg(x, y-.2f, z, x, y + 4.4f*s, z, .42f*s, .32f*s, .2f, .42f, .15f);
-    for (int q = 0; q < 2; q++) { float a = q*3.14f + vn(seed, q)*.6f, ax = x + cosf(a)*1.1f*s, az = z + sinf(a)*1.1f*s, y0 = y + (1.6f + q*.8f)*s;
-      seg(x + cosf(a)*.2f*s, y0, z + sinf(a)*.2f*s, ax, y0 + .9f*s, az, .26f*s, .22f*s, .2f, .42f, .15f); seg(ax, y0 + .8f*s, az, ax, y0 + 2.1f*s, az, .22f*s, .18f*s, .2f, .42f, .15f); }
-  } else if (k == 1) blob(x, y, z, .85f*s, .75f*s, .85f*s, seed, 4, .1f, lod == 0 ? 2 : 1);
-  else for (int q = 0; q < 4; q++) { float a = q*1.57f + vn(seed, q), qx = x + cosf(a)*.5f*s, qz = z + sinf(a)*.5f*s; blob(qx, y + .3f*q*s, qz, (q & 1 ? .22f : .8f)*s, .62f*s, (q & 1 ? .8f : .22f)*s, seed + q, 4, .15f, 1); }
+    int np = 0; float H = 4.4f*s, r0 = .36f*s;
+    for (int i = 0; i < 6; i++) { float t = i/5.f; P[np*3] = x + .12f*s*sinf(t*2.f + seed); P[np*3+1] = y - .2f + (H + .2f)*t; P[np*3+2] = z; Rr[np++] = r0*(1.35f - .35f*t); }
+    for (int i = 1; i <= 3; i++) { float th = i*.5236f; P[np*3] = P[15]; P[np*3+1] = y + H + r0*sinf(th); P[np*3+2] = z; Rr[np++] = fmaxf(.02f, r0*cosf(th)); }
+    tube(P, Rr, np, sides, 4);
+    for (int q = 0; q < 2; q++) {
+      float a = q*3.1416f + vn(seed, q)*.7f, dx = cosf(a), dz = sinf(a), y0 = y + (1.5f + q*.9f)*s, ar = .24f*s; int m = 0;
+      const float ox[6] = {.2f, .8f, 1.3f, 1.55f, 1.6f, 1.6f}, oy[6] = {0, .05f, .3f, .85f, 1.5f, 2.f};
+      for (int i = 0; i < 6; i++) { P[m*3] = x + dx*ox[i]*s; P[m*3+1] = y0 + oy[i]*s; P[m*3+2] = z + dz*ox[i]*s; Rr[m++] = ar; }
+      for (int i = 1; i <= 3; i++) { float th = i*.5236f; P[m*3] = P[15]; P[m*3+1] = y0 + 2.f*s + ar*sinf(th); P[m*3+2] = P[17]; Rr[m++] = fmaxf(.02f, ar*cosf(th)); }
+      tube(P, Rr, m, sides, 4);
+    }
+  } else if (k == 1) {
+    const float hy[7] = {0, .25f, .6f, 1.f, 1.4f, 1.7f, 1.85f}, rr[7] = {.2f, .75f, .98f, 1.f, .86f, .5f, .06f};
+    for (int i = 0; i < 7; i++) { P[i*3] = x; P[i*3+1] = y + hy[i]*s*.9f - .1f; P[i*3+2] = z; Rr[i] = rr[i]*.85f*s; }
+    tube(P, Rr, 7, sides + 2 > 12 ? 12 : sides + 2, 4);
+  } else for (int q = 0; q < 4; q++) { float a = q*1.57f + vn(seed, q), qx = x + cosf(a)*.5f*s, qz = z + sinf(a)*.5f*s; blob(qx, y + .3f*q*s, qz, (q & 1 ? .22f : .8f)*s, .62f*s, (q & 1 ? .8f : .22f)*s, seed + q, 4, .1f, 1); }
 }
 static void water() {
   auto W3 = [&](int i, int j) { vb.push_back({TX0 + i*5.f, -.2f, TZ0 + j*5.f, -.2f - TH[i][j], 0, 0}); };
@@ -380,7 +438,7 @@ static void pebbles() {   // stones on the beach
   int cx = (int)floorf(px/2), cz = (int)floorf(pz/2);
   for (int i = -16; i <= 16; i++) for (int j = -16; j <= 16; j++) {
     int gx = cx + i, gz = cz + j; if (vn(gx*5+3, gz*7+1) < .86f) continue;
-    float x = (gx + vn(gx, gz+2))*2, z = (gz + vn(gz+5, gx))*2, h = hgt(x, z);
+    float x = (gx + vn(gx, gz+2))*2, z = (gz + vn(gz+5, gx))*2, h = meshH(x, z);
     if (h < -.3f || h > 1.4f || (x-px)*(x-px) + (z-pz)*(z-pz) > 1000) continue;
     float s = .12f + .3f*vn(gx+9, gz), g = .22f + .25f*vn(gz, gx+4);
     blob(x, h - .03f, z, s, s*.55f, s*.8f, gx^gz, 3, .3f, 0);
@@ -478,20 +536,22 @@ static void render(float dt) {
   hudT -= dt;
   if (hudT <= 0) {
     hudT = .1f; char b[220];
-    snprintf(b, sizeof b, "%d|%d|%d|%d|%d|%d|%d|%s", (int)hp, (int)food, (int)thirst, wood, stone, metal, sulfur, msgT > 0 ? msg : "");
+    snprintf(b, sizeof b, "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s", (int)hp, (int)food, (int)thirst, wood, stone, metal, sulfur, (int)px, (int)pz, (int)(yaw*100), msgT > 0 ? msg : "");
     hud(b);
   }
 }
 static void genChunk(int cx, int cz) {
   for (int i = 0; i < 60; i++) {
-    float x = (cx + vn(cx*17 + i, cz*31 + 5))*64.f, z = (cz + vn(cx*23 + 7, cz*19 + i))*64.f, h = hgt(x, z), r = vn(cx*13 + i*3, cz*7 + i), bio = biomeAt(x, z);
-    if (hypotf(x, z) < 6.f || h < .8f) continue;
+    float x = (cx + vn(cx*17 + i, cz*31 + 5))*64.f, z = (cz + vn(cx*23 + 7, cz*19 + i))*64.f, sl, h = meshH(x, z, &sl), r = vn(cx*13 + i*3, cz*7 + i), bio = biomeAt(x, z);
+    if (hypotf(x, z) < 6.f || h < .8f || sl > .5f) continue;   // no water, no cliff faces
     int bi = bio < .5f ? 0 : bio < 1.5f ? 1 : 2, ty;
     if (bi == 0) ty = h < 1.8f ? (r < .6f ? 2 : -1) : r < .25f ? 0 : r < .6f ? 4 : r < .69f ? 1 : r < .75f ? 5 : r < .8f ? 6 : 2;
     else if (bi == 1) ty = r < .38f ? 9 : r < .5f ? 3 : r < .68f ? 10 : r < .78f ? 1 : r < .86f ? 5 : r < .92f ? 6 : -1;
     else ty = r < .5f ? 7 : r < .68f ? 8 : r < .78f ? 1 : r < .85f ? 5 : r < .9f ? 6 : -1;
     if (ty < 0) continue;
-    nodes.push_back({x, z, 0, ty, ty == 0 || ty == 7 ? 5 : ty == 1 || ty == 5 || ty == 6 ? 7 : ty == 3 ? 4 : ty == 4 ? 5 : ty == 9 ? 3 : 1, h});
+    float rad = ty == 1 || ty == 5 || ty == 6 ? 1.7f : ty == 2 || ty == 8 || ty == 10 ? 1.5f : .7f;
+    float yy = fminf(h, fminf(fminf(meshH(x + rad, z), meshH(x - rad, z)), fminf(meshH(x, z + rad), meshH(x, z - rad))));   // sink into slopes, never float
+    nodes.push_back({x, z, 0, ty, ty == 0 || ty == 7 ? 5 : ty == 1 || ty == 5 || ty == 6 ? 7 : ty == 3 ? 4 : ty == 4 ? 5 : ty == 9 ? 3 : 1, yy});
   }
 }
 static void ensureChunks() {
@@ -538,6 +598,6 @@ int main() {
     shOk = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE; glBindFramebuffer(GL_FRAMEBUFFER, 0);
   }
   say("Лево: ходьба · Право: камера"); msgT = 6;
-  py = hgt(0, 0);
+  py = meshH(0, 0);
   emscripten_set_main_loop(loop, 0, 1);
 }
