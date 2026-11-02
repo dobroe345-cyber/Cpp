@@ -9,12 +9,12 @@
 using namespace std;
 
 struct V { float x, y, z, r, g, b; };
-struct Node { float x, z, t; int type, hp; float y; };      // 0 tree, 1 rock, 2 berry bush
+struct Node { float x, z, t; int type, hp; float y; int lod = -1; vector<V> mesh; };      // 0 tree, 1 rock, 2 berry bush
 struct Blk { float x, z, w, d; bool wall; float y; };       // building piece
 struct Fin { int id; float x, y, bx, by; };        // finger
 
-static vector<V> vb; static vector<Node> nodes; static vector<Blk> blks;
-static GLint uM, uFog, uLit, uTx, uSd, uEy, uTm, uLm, uSm, uSs, uShLm; static GLuint prog, shProg, shFbo, shTex; static bool shOk = false; static vector<V> sv; static float txOn = 1; static int W = 0, H = 0; static float K = 1;
+static vector<V> vb, sv, sv1, mv; static vector<Node> nodes; static vector<Blk> blks;
+static GLint uM, uFog, uLit, uTx, uSd, uEy, uTm, uLm, uSm, uSs, uShLm, uLm2, uSm2; static GLuint prog, shProg, shFbo, shTex, shFbo2, shTex2; static bool shOk = false, shOk2 = false; static float txOn = 1; static int W = 0, H = 0; static float K = 1;
 static float px = 0, py = 0, pz = 0, vy = 0, yaw = 0, pitch = 0, hp = 100, food = 100;
 static float tod = .1f, cd = 0, hudT = 0, msgT = 0; static int wood = 60, stone = 0, metal = 0, sulfur = 0, mode = 0; static float thirst = 100;
 static char msg[96] = ""; static bool inBush = false; static Fin st = {-1}, lk = {-1};
@@ -25,17 +25,23 @@ EM_JS(float, gf, (int i), { var v = window.G[i] || 0; if (i > 4) window.G[i] = 0
 EM_JS(void, aud, (int sf, int sp, int bu, float td, int jm), { if (window.audioState) window.audioState(sf, sp, bu, td, jm); });
 EM_JS(void, hud, (const char* s), { if (window.hudUpdate) window.hudUpdate(UTF8ToString(s)); });
 
-static const char* VS = "attribute vec3 p;attribute vec3 c;uniform mat4 m;uniform mat4 lm;uniform float tx;uniform float tm;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;"
-  "void main(){vec3 q=p;float o=0.;if(tx>1.5&&tx<2.5){o=.16*sin(tm*.7)+.1*sin(dot(p.xz,vec2(.06,.045))-tm*1.15);q.y+=o;}gl_Position=m*vec4(q,1.);vc=c;d=gl_Position.w;wp=q;ls=lm*vec4(q,1.);wo=o;}";
+static const char* VS = "attribute vec3 p;attribute vec3 c;uniform mat4 m;uniform mat4 lm;uniform mat4 lm2;uniform float tx;uniform float tm;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying vec4 ls2;varying float wo;"
+  "void main(){vec3 q=p;float o=0.;if(tx>1.5&&tx<2.5){o=.16*sin(tm*.7)+.1*sin(dot(p.xz,vec2(.06,.045))-tm*1.15);q.y+=o;}gl_Position=m*vec4(q,1.);vc=c;d=gl_Position.w;wp=q;ls=lm*vec4(q,1.);ls2=lm2*vec4(q,1.);wo=o;}";
 static const char* FS = "#extension GL_OES_standard_derivatives : enable\n"
-  "precision highp float;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;uniform vec3 fog;uniform vec3 sd;uniform vec3 ey;uniform float lit;uniform float tx;uniform float tm;uniform sampler2D sm;uniform float ss;"
+  "precision highp float;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying vec4 ls2;varying float wo;uniform vec3 fog;uniform vec3 sd;uniform vec3 ey;uniform float lit;uniform float tx;uniform float tm;uniform sampler2D sm;uniform sampler2D sm2;uniform float ss;"
   "float h(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}"
   "float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*f*(f*(f*6.-15.)+10.);return mix(mix(h(i),h(i+vec2(1.,0.)),f.x),mix(h(i+vec2(0.,1.)),h(i+vec2(1.,1.)),f.x),f.y);}"
   "float fb(vec2 p){float a=.5,s=0.;for(int i=0;i<5;i++){s+=a*n(p);p=mat2(.8,.6,-.6,.8)*p*2.03+vec2(17.1,9.2);a*=.5;}return s;}"
   "float wv(vec2 p){p=mat2(.8,.6,-.6,.8)*p;float a=n(p*.35+vec2(tm*.25,tm*.15))*.6;p=mat2(.8,.6,-.6,.8)*p*2.1;return a+n(p-vec2(tm*.45,tm*.3))*.28+n(p*2.3+tm*.6)*.12;}"
   "float lf(vec2 q){vec2 i=floor(q),f=fract(q)-.5;float a=h(i)*6.283;f+=(vec2(h(i+7.),h(i+13.))-.5)*.3;vec2 r=vec2(cos(a)*f.x+sin(a)*f.y,-sin(a)*f.x+cos(a)*f.y);return 1.-step(1.,length(r/vec2(.52,.24)));}float lfm(vec2 u){return max(lf(u*5.),lf(u*6.+3.1))*step(length(u-.5),.5);}"
   "float up(vec4 c){return dot(c,vec4(1.,1./255.,1./65025.,1./16581375.));}"
-  "float shw(float bs){vec3 q=ls.xyz/ls.w*.5+.5;if(q.x<0.||q.x>1.||q.y<0.||q.y>1.||q.z>1.)return 1.;float s=(q.z-bs>up(texture2D(sm,q.xy)))?0.:1.;for(int i=0;i<8;i++){float a=float(i)*.785;vec2 o=vec2(cos(a),sin(a))*.0011;s+=(q.z-bs>up(texture2D(sm,q.xy+o)))?0.:1.;}float e=max(abs(q.x-.5),abs(q.y-.5))*2.;return mix(1.,s/9.,1.-smoothstep(.8,1.,e));}"
+  "float shs0(vec3 q,float bs){float s=(q.z-bs>up(texture2D(sm,q.xy)))?0.:1.;for(int i=0;i<8;i++){float a=float(i)*.785;vec2 o=vec2(cos(a),sin(a))*.0011;s+=(q.z-bs>up(texture2D(sm,q.xy+o)))?0.:1.;}return s/9.;}"
+  "float shs1(vec3 q,float bs){float s=(q.z-bs>up(texture2D(sm2,q.xy)))?0.:1.;for(int i=0;i<8;i++){float a=float(i)*.785;vec2 o=vec2(cos(a),sin(a))*.0022;s+=(q.z-bs>up(texture2D(sm2,q.xy+o)))?0.:1.;}return s/9.;}"
+  "float shw(float bs){vec3 q=ls.xyz/ls.w*.5+.5;float e=max(abs(q.x-.5),abs(q.y-.5))*2.;bool in0=e<1.&&q.z<=1.;"
+  "if(ss<1.5){if(!in0)return 1.;return mix(1.,shs0(q,bs),1.-smoothstep(.8,1.,e));}"
+  "if(in0&&e<.8)return shs0(q,bs);"
+  "vec3 r=ls2.xyz/ls2.w*.5+.5;float e2=max(abs(r.x-.5),abs(r.y-.5))*2.;float f=1.;if(e2<1.&&r.z<=1.)f=mix(1.,shs1(r,bs),1.-smoothstep(.8,1.,e2));"
+  "if(!in0)return f;return mix(shs0(q,bs),f,smoothstep(.8,1.,e));}"
   "void main(){vec3 c=vc;float a=1.;"
   "if(tx<.5){vec3 al=vc;vec3 N=normalize(cross(dFdx(wp),dFdy(wp)));if(dot(N,ey-wp)<0.)N=-N;bool fo=vc.b>1.5,rk=vc.r>5.&&!fo;"
   "if(fo){if(lfm(vc.xy)<.5)discard;float k=vc.b-2.,pl=floor(k+.01),t=(k-pl)/.99;vec3 a0,a1;if(pl<.5){a0=vec3(.07,.2,.05);a1=vec3(.45,.62,.14);}else if(pl<1.5){a0=vec3(.04,.14,.08);a1=vec3(.2,.42,.2);}else if(pl<2.5){a0=vec3(.1,.2,.05);a1=vec3(.38,.52,.14);}else if(pl<3.5){a0=vec3(.03,.11,.08);a1=vec3(.14,.3,.2);}else if(pl<4.5){a0=vec3(.08,.18,.07);a1=vec3(.26,.4,.16);}else{a0=vec3(.3,.26,.1);a1=vec3(.62,.55,.26);}al=mix(a0,a1,t)*(.85+.3*h(floor(vc.xy*5.)));if(pl>2.5&&pl<4.5)al=mix(al,vec3(.93,.96,1.),smoothstep(.15,.65,N.y)*.9);}"
@@ -209,19 +215,49 @@ static void update(float dt) {
   mode = gk(2);
   if (gk(0) && cd <= 0) act();
 }
+static float FR[6][4];                 // camera frustum planes
+static float CM[2][16];                // shadow cascade matrices: 0 = near (sharp), 1 = far (wide)
+static const float CS[2] = {34.f, 120.f}, CN[2] = {20.f, 50.f}, CF[2] = {180.f, 350.f}, CD[2] = {100.f, 200.f};
+static const int CZ[2] = {2048, 1024};
+static void setFrustum(const float* m) {   // Gribb-Hartmann planes from the view-projection matrix
+  for (int i = 0; i < 6; i++) {
+    int r = i >> 1; float sg = (i & 1) ? -1.f : 1.f;
+    for (int k = 0; k < 4; k++) FR[i][k] = m[k*4 + 3] + sg*m[k*4 + r];
+    float l = sqrtf(FR[i][0]*FR[i][0] + FR[i][1]*FR[i][1] + FR[i][2]*FR[i][2]) + 1e-9f;
+    for (int k = 0; k < 4; k++) FR[i][k] /= l;
+  }
+}
+static bool inView(float x, float y, float z, float r) {   // sphere vs camera frustum
+  for (int i = 0; i < 6; i++) if (FR[i][0]*x + FR[i][1]*y + FR[i][2]*z + FR[i][3] < -r) return false;
+  return true;
+}
+static bool inLight(int c, float x, float y, float z, float r) {   // sphere vs a shadow cascade's ortho box
+  const float* M = CM[c]; float m = 1.f + r/CS[c];
+  float u = M[0]*x + M[4]*y + M[8]*z + M[12], v = M[1]*x + M[5]*y + M[9]*z + M[13], w = M[2]*x + M[6]*y + M[10]*z + M[14];
+  return fabsf(u) <= m && fabsf(v) <= m && fabsf(w) <= 1.f + r*2.f/(CF[c] - CN[c]);
+}
 static float TH[43][43], TX0, TZ0;
 static void terrain() {
   const int N = 21; const float C = 5.f; int gx0 = (int)floorf(px/C), gz0 = (int)floorf(pz/C);
-  static float Y[2*N+1][2*N+1], Q[2*N+1][2*N+1][3];
-  for (int i = 0; i <= 2*N; i++) for (int j = 0; j <= 2*N; j++) {
-    float x = (gx0-N+i)*C, z = (gz0-N+j)*C, h = hgt(x, z);
-    float dx = hgt(x-2,z) - hgt(x+2,z), dz = hgt(x,z-2) - hgt(x,z+2), l = sqrtf(dx*dx + 16 + dz*dz), ny = 4/l;
-    float lit = .5f + .5f*fmaxf(0.f, (dx*.4f + 3.f - dz*.5f)/l);
-    Y[i][j] = TH[i][j] = h; Q[i][j][0] = lit; Q[i][j][1] = ny; Q[i][j][2] = biomeAt(x, z);
+  static float Y[2*N+1][2*N+1], Q[2*N+1][2*N+1][3], Yn[2*N+1][2*N+1], Qn[2*N+1][2*N+1][3];
+  static int cgx = 0, cgz = 0; static bool have = false; static vector<V> tc;
+  if (!have || gx0 != cgx || gz0 != cgz) {
+    int sx = gx0 - cgx, sz = gz0 - cgz;
+    for (int i = 0; i <= 2*N; i++) for (int j = 0; j <= 2*N; j++) {
+      int oi = i + sx, oj = j + sz;
+      if (have && oi >= 0 && oi <= 2*N && oj >= 0 && oj <= 2*N) { Yn[i][j] = Y[oi][oj]; for (int k = 0; k < 3; k++) Qn[i][j][k] = Q[oi][oj][k]; continue; }
+      float x = (gx0-N+i)*C, z = (gz0-N+j)*C, h = hgt(x, z);
+      float dx = hgt(x-2,z) - hgt(x+2,z), dz = hgt(x,z-2) - hgt(x,z+2), l = sqrtf(dx*dx + 16 + dz*dz), ny = 4/l;
+      float lit = .5f + .5f*fmaxf(0.f, (dx*.4f + 3.f - dz*.5f)/l);
+      Yn[i][j] = h; Qn[i][j][0] = lit; Qn[i][j][1] = ny; Qn[i][j][2] = biomeAt(x, z);
+    }
+    for (int i = 0; i <= 2*N; i++) for (int j = 0; j <= 2*N; j++) { Y[i][j] = TH[i][j] = Yn[i][j]; for (int k = 0; k < 3; k++) Q[i][j][k] = Qn[i][j][k]; }
+    TX0 = (gx0-N)*C; TZ0 = (gz0-N)*C; cgx = gx0; cgz = gz0; have = true;
+    tc.clear();
+    auto P = [&](int i, int j) { tc.push_back({(gx0-N+i)*C, Y[i][j], (gz0-N+j)*C, Q[i][j][0], Q[i][j][1], Q[i][j][2]}); };
+    for (int i = 0; i < 2*N; i++) for (int j = 0; j < 2*N; j++) { P(i,j); P(i+1,j); P(i+1,j+1); P(i,j); P(i+1,j+1); P(i,j+1); }
   }
-  TX0 = (gx0-N)*C; TZ0 = (gz0-N)*C;
-  auto P = [&](int i, int j) { vb.push_back({(gx0-N+i)*C, Y[i][j], (gz0-N+j)*C, Q[i][j][0], Q[i][j][1], Q[i][j][2]}); };
-  for (int i = 0; i < 2*N; i++) for (int j = 0; j < 2*N; j++) { P(i,j); P(i+1,j); P(i+1,j+1); P(i,j); P(i+1,j+1); P(i,j+1); }
+  vb.insert(vb.end(), tc.begin(), tc.end());
 }
 static void seg(float x0, float y0, float z0, float x1, float y1, float z1, float r0, float r1, float cr, float cg, float cb) {
   for (int i = 0; i < 6; i++) {
@@ -250,12 +286,13 @@ static void palm(float x, float y, float z) {
   }
 }
 static void grass(float tt) {   // short dense tufts
-  int cx = (int)floorf(px), cz = (int)floorf(pz);
+  int cx = (int)floorf(px), cz = (int)floorf(pz); float gfx = -sinf(yaw), gfz = -cosf(yaw);
   for (int i = -20; i <= 20; i++) for (int j = -20; j <= 20; j++) {
     int gx = cx + i, gz = cz + j; if (vn(gx*3+1, gz*5+2) < .2f) continue;
     float x = gx + vn(gx, gz), z = gz + vn(gz+7, gx), dx = x-px, dz = z-pz, d2 = dx*dx + dz*dz;
     if (d2 > 400) continue;
-    float sl, h = meshH(x, z, &sl); if (h < 1.5f || sl > .5f || biomeAt(x, z) > .3f) continue;
+    if (d2 > 16 && dx*gfx + dz*gfz < .15f*sqrtf(d2)) continue;
+    float sl, h = meshH(x, z, &sl); if (h < 1.5f || sl > .5f || !inView(x, h + .3f, z, 1.2f) || biomeAt(x, z) > .3f) continue;
     float kind = vn(gx+5, gz+1), s = .22f + .3f*vn(gx+3, gz+9), w = sinf(tt*2 + x*.7f + z*.5f)*.08f*s;
     float cr = .12f, cg = .3f, cb = .07f, tr = .45f, tg = .66f, tb = .2f;
     if (kind < .4f) { cr = .22f; cg = .32f; cb = .09f; tr = .72f; tg = .72f; tb = .27f; }
@@ -412,23 +449,32 @@ static void ore(float x, float y, float z, int t, int seed, int lod) {   // 0 st
   if (biomeAt(x, z) > 1.5f) t += 8;
   blob(x, y, z, 1.9f, 1.5f, 1.7f, seed, t, .42f, lod == 0 ? 2 : 1);
 }
-static void lightMat(float* LM, float lx, float ly, float lz) {   // orthographic sun view around the player
+static void lightMat(float* LM, float lx, float ly, float lz, float S, float dist, float nn, float ff) {   // orthographic sun view around the player
   ly = fmaxf(ly, .25f); float ll = sqrtf(lx*lx + ly*ly + lz*lz); lx /= ll; ly /= ll; lz /= ll;
-  float ex = px + lx*100, ey = py + ly*100, ez = pz + lz*100, fx = -lx, fy = -ly, fz = -lz, ux = 0, uy = 1, uz = 0;
+  float ex = px + lx*dist, ey = py + ly*dist, ez = pz + lz*dist, fx = -lx, fy = -ly, fz = -lz, ux = 0, uy = 1, uz = 0;
   if (ly > .95f) { uy = 0; uz = 1; }
   float rx = fy*uz - fz*uy, ry = fz*ux - fx*uz, rz = fx*uy - fy*ux, rl = sqrtf(rx*rx + ry*ry + rz*rz); rx /= rl; ry /= rl; rz /= rl;
   float vx = ry*fz - rz*fy, vy = rz*fx - rx*fz, vz = rx*fy - ry*fx;
   float V4[16] = {rx, vx, -fx, 0,  ry, vy, -fy, 0,  rz, vz, -fz, 0,  -(rx*ex + ry*ey + rz*ez), -(vx*ex + vy*ey + vz*ez), fx*ex + fy*ey + fz*ez, 1};
-  const float S = 34.f, nn = 20.f, ff = 180.f;
   float Pl[16] = {1/S,0,0,0, 0,1/S,0,0, 0,0,-2/(ff-nn),0, 0,0,-(ff+nn)/(ff-nn),1};
   mul(LM, Pl, V4);
 }
-static void shadowDraw(const float* LM) {
-  glBindFramebuffer(GL_FRAMEBUFFER, shFbo); glViewport(0, 0, 2048, 2048);
+static void shadowDraw(const float* LM, GLuint fbo, int size, const vector<V>& v) {
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo); glViewport(0, 0, size, size);
   glClearColor(1, 1, 1, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
   glUseProgram(shProg); glUniformMatrix4fv(uShLm, 1, 0, LM);
-  glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(V), sv.data(), GL_STREAM_DRAW); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)sv.size());
+  if (!v.empty()) { glBufferData(GL_ARRAY_BUFFER, v.size()*sizeof(V), v.data(), GL_STREAM_DRAW); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)v.size()); }
   glBindFramebuffer(GL_FRAMEBUFFER, 0); glViewport(0, 0, W, H); glUseProgram(prog);
+}
+static bool shadowTarget(int size, GLuint& fbo, GLuint& tex) {
+  glGenTextures(1, &tex); glBindTexture(GL_TEXTURE_2D, tex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  GLuint rb; glGenRenderbuffers(1, &rb); glBindRenderbuffer(GL_RENDERBUFFER, rb); glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, size, size);
+  glGenFramebuffers(1, &fbo); glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0); glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
+  bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE; glBindFramebuffer(GL_FRAMEBUFFER, 0); return ok;
 }
 static void quadUV(float x, float y, float z, float ux, float uy, float uz, float vx, float vy, float vz, float e) {
   tv(x-ux-vx, y-uy-vy, z-uz-vz, 0, 0, e); tv(x+ux-vx, y+uy-vy, z+uz-vz, 1, 0, e); tv(x+ux+vx, y+uy+vy, z+uz+vz, 1, 1, e);
@@ -438,29 +484,61 @@ static void pebbles() {   // stones on the beach
   int cx = (int)floorf(px/2), cz = (int)floorf(pz/2);
   for (int i = -16; i <= 16; i++) for (int j = -16; j <= 16; j++) {
     int gx = cx + i, gz = cz + j; if (vn(gx*5+3, gz*7+1) < .86f) continue;
-    float x = (gx + vn(gx, gz+2))*2, z = (gz + vn(gz+5, gx))*2, h = meshH(x, z);
-    if (h < -.3f || h > 1.4f || (x-px)*(x-px) + (z-pz)*(z-pz) > 1000) continue;
+    float x = (gx + vn(gx, gz+2))*2, z = (gz + vn(gz+5, gx))*2;
+    if ((x-px)*(x-px) + (z-pz)*(z-pz) > 1000) continue;
+    float h = meshH(x, z);
+    if (h < -.3f || h > 1.4f || !inView(x, h, z, .6f)) continue;
     float s = .12f + .3f*vn(gx+9, gz), g = .22f + .25f*vn(gz, gx+4);
     blob(x, h - .03f, z, s, s*.55f, s*.8f, gx^gz, 3, .3f, 0);
   }
 }
-static void scene() {
-  pebbles();
+static void buildNode(const Node& o, int lod) {
+  int sd0 = (int)(o.x*7) ^ (int)(o.z*13), ty = o.type;
+  if (ty == 0) pine(o.x, o.y, o.z, .9f + .6f*vn(sd0, 1), lod, 1);
+  else if (ty == 7) pine(o.x, o.y, o.z, .9f + .6f*vn(sd0, 1), lod, 3);
+  else if (ty == 1 || ty == 5 || ty == 6) ore(o.x, o.y, o.z, ty == 1 ? 0 : ty - 4, sd0, lod);
+  else if (ty == 2) bush(o.x, o.y, o.z, sd0, lod, 2);
+  else if (ty == 8) bush(o.x, o.y, o.z, sd0, lod, 4);
+  else if (ty == 10) bush(o.x, o.y, o.z, sd0, lod, 5);
+  else if (ty == 4) oak(o.x, o.y, o.z, .9f + .5f*vn(sd0, 2), sd0, lod);
+  else if (ty == 9) cactus(o.x, o.y, o.z, sd0, lod);
+  else palm(o.x, o.y, o.z);
+}
+// fills mv (camera pass), sv (near shadow cascade), sv1 (far cascade); each object goes only where it can be seen
+static void scene(bool s0, bool s1) {
+  mv.clear(); sv.clear(); sv1.clear(); vb.clear();
+  pebbles(); mv.insert(mv.end(), vb.begin(), vb.end()); vb.clear();
+  int pre = 6;   // meshes built per frame for objects that are not on screen yet, so turning around does not stall
   for (auto& o : nodes) {
-    if (o.hp <= 0) continue; float dx = o.x-px, dz = o.z-pz; if (dx*dx + dz*dz > 16900) continue;
-    float d2 = dx*dx + dz*dz; int lod = d2 < 1500 ? 0 : d2 < 5000 ? 1 : 2, sd0 = (int)(o.x*7) ^ (int)(o.z*13), ty = o.type;
+    if (o.hp <= 0) continue;
+    float dx = o.x-px, dz = o.z-pz, d2 = dx*dx + dz*dz; int ty = o.type;
+    if (d2 > 16900) { if (d2 > 40000 && o.lod >= 0) { vector<V>().swap(o.mesh); o.lod = -1; } continue; }
     if ((ty == 2 || ty == 8 || ty == 10) && d2 > 8100) continue;
-    if (ty == 0) pine(o.x, o.y, o.z, .9f + .6f*vn(sd0, 1), lod, 1);
-    else if (ty == 7) pine(o.x, o.y, o.z, .9f + .6f*vn(sd0, 1), lod, 3);
-    else if (ty == 1 || ty == 5 || ty == 6) ore(o.x, o.y, o.z, ty == 1 ? 0 : ty - 4, sd0, lod);
-    else if (ty == 2) bush(o.x, o.y, o.z, sd0, lod, 2);
-    else if (ty == 8) bush(o.x, o.y, o.z, sd0, lod, 4);
-    else if (ty == 10) bush(o.x, o.y, o.z, sd0, lod, 5);
-    else if (ty == 4) oak(o.x, o.y, o.z, .9f + .5f*vn(sd0, 2), sd0, lod);
-    else if (ty == 9) cactus(o.x, o.y, o.z, sd0, lod);
-    else palm(o.x, o.y, o.z);
+    float hc = 6.f, br = 11.f;   // bounding sphere: centre height above the ground, radius
+    if (ty == 4) { hc = 7.f; br = 12.5f; } else if (ty == 3) { hc = 4.5f; br = 8.f; } else if (ty == 9) { hc = 3.5f; br = 6.f; }
+    else if (ty == 1 || ty == 5 || ty == 6) { hc = 1.2f; br = 3.8f; } else if (ty == 2 || ty == 8 || ty == 10) { hc = 1.8f; br = 4.8f; }
+    float cy = o.y + hc;
+    bool a = inView(o.x, cy, o.z, br), b0 = s0 && inLight(0, o.x, cy, o.z, br), b1 = s1 && inLight(1, o.x, cy, o.z, br), need = a || b0 || b1;
+    int lod = d2 < 1500 ? 0 : d2 < 5000 ? 1 : 2;
+    if (o.lod != lod || o.mesh.empty()) {
+      if (!need) { if (pre <= 0) continue; pre--; }
+      vb.clear(); buildNode(o, lod); o.mesh.assign(vb.begin(), vb.end()); vb.clear(); o.lod = lod;
+    }
+    if (a) mv.insert(mv.end(), o.mesh.begin(), o.mesh.end());
+    if (b0) sv.insert(sv.end(), o.mesh.begin(), o.mesh.end());
+    if (b1) sv1.insert(sv1.end(), o.mesh.begin(), o.mesh.end());
   }
-  for (auto& b : blks) { if (b.wall) box(b.x,b.y-1.2f,b.z,b.w,4.2f,b.d,.6f,.42f,.22f); else box(b.x,b.y-1.2f,b.z,b.w,1.5f,b.d,.5f,.35f,.18f); }
+  for (auto& b : blks) {
+    float cy = b.y + .9f, br = 3.4f;
+    bool a = inView(b.x, cy, b.z, br), b0 = s0 && inLight(0, b.x, cy, b.z, br), b1 = s1 && inLight(1, b.x, cy, b.z, br);
+    if (!a && !b0 && !b1) continue;
+    vb.clear();
+    if (b.wall) box(b.x,b.y-1.2f,b.z,b.w,4.2f,b.d,.6f,.42f,.22f); else box(b.x,b.y-1.2f,b.z,b.w,1.5f,b.d,.5f,.35f,.18f);
+    if (a) mv.insert(mv.end(), vb.begin(), vb.end());
+    if (b0) sv.insert(sv.end(), vb.begin(), vb.end());
+    if (b1) sv1.insert(sv1.end(), vb.begin(), vb.end());
+  }
+  vb.clear();
 }
 static void render(float dt) {
   float k = fminf(fmaxf(sinf(tod*6.2832f)*2 + .5f, .06f), 1.f), dyf = fminf(fmaxf((k - .06f)/.94f, 0.f), 1.f), wm = fmaxf(0.f, 1.f - fabsf(sinf(tod*6.2832f))*6.f), sky[3] = {.07f + .59f*dyf + .3f*wm, .1f + .7f*dyf + .12f*wm, .2f + .75f*dyf - .05f*wm}, top[3] = {.01f + .19f*dyf, .02f + .4f*dyf, .07f + .78f*dyf};
@@ -511,19 +589,27 @@ static void render(float dt) {
     }
     glEnable(GL_DEPTH_TEST); txOn = 1;
   }
-  vb.clear(); scene(); sv.swap(vb);
-  float th2 = tod*6.2832f, L0[3] = {.62f*cosf(th2), sinf(th2), -.78f*cosf(th2)}, LM[16];
-  bool shOn = shOk && L0[1] > .08f;
+  setFrustum(A);
+  float th2 = tod*6.2832f, L0[3] = {.62f*cosf(th2), sinf(th2), -.78f*cosf(th2)};
+  bool shOn = shOk && L0[1] > .08f, updFar = false; static bool farOk = false; static int fcnt = 0;
   if (shOn) {
-    lightMat(LM, L0[0], L0[1], L0[2]); shadowDraw(LM);
-    glUniformMatrix4fv(uLm, 1, 0, LM); glUniform1i(uSm, 1); glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, shTex); glActiveTexture(GL_TEXTURE0);
+    lightMat(CM[0], L0[0], L0[1], L0[2], CS[0], CD[0], CN[0], CF[0]);
+    if (shOk2 && (!farOk || (fcnt++ & 3) == 0)) { lightMat(CM[1], L0[0], L0[1], L0[2], CS[1], CD[1], CN[1], CF[1]); updFar = true; farOk = true; }   // far cascade refreshes every 4th frame
+  } else farOk = false;
+  scene(shOn, updFar);
+  if (shOn) {
+    shadowDraw(CM[0], shFbo, CZ[0], sv);
+    if (updFar) shadowDraw(CM[1], shFbo2, CZ[1], sv1);
+    glUniformMatrix4fv(uLm, 1, 0, CM[0]); glUniform1i(uSm, 1); glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, shTex);
+    if (shOk2) { glUniformMatrix4fv(uLm2, 1, 0, CM[1]); glUniform1i(uSm2, 2); glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, shTex2); }
+    glActiveTexture(GL_TEXTURE0);
   }
-  glUniform1f(uSs, shOn ? 1.f : 0.f);
+  glUniform1f(uSs, !shOn ? 0.f : (shOk2 ? 2.f : 1.f));
   terrain(); flush(A, sky, lt);
   txOn = 8; grass(tt); flush(A, sky, lt);
   txOn = 2; water(); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); flush(A, sky, lt); glDisable(GL_BLEND);
   txOn = 0;
-  vb.swap(sv);
+  vb.swap(mv);
   if (mode) { Blk g = ghost(); bool ok = wood >= (mode == 1 ? 30 : 20); float gr = ok ? .3f : .9f, gg = ok ? .9f : .25f, gb = ok ? .3f : .2f; if (g.wall) box(g.x,g.y-1.2f,g.z,g.w,4.2f,g.d,gr,gg,gb); else box(g.x,g.y-1.2f,g.z,g.w,1.52f,g.d,gr,gg,gb); }
   flush(A, sky, .25f + .75f*k);
   glDisable(GL_DEPTH_TEST);
@@ -576,7 +662,7 @@ int main() {
   auto gctx = emscripten_webgl_create_context("#canvas", &a); emscripten_webgl_make_context_current(gctx); emscripten_webgl_enable_extension(gctx, "OES_standard_derivatives");
   GLuint p = glCreateProgram(); glAttachShader(p, sh(GL_VERTEX_SHADER, VS)); glAttachShader(p, sh(GL_FRAGMENT_SHADER, FS));
   glBindAttribLocation(p, 0, "p"); glBindAttribLocation(p, 1, "c"); glLinkProgram(p); glUseProgram(p); prog = p;
-  uM = glGetUniformLocation(p, "m"); uFog = glGetUniformLocation(p, "fog"); uLit = glGetUniformLocation(p, "lit"); uTx = glGetUniformLocation(p, "tx"); uSd = glGetUniformLocation(p, "sd"); uEy = glGetUniformLocation(p, "ey"); uTm = glGetUniformLocation(p, "tm"); uLm = glGetUniformLocation(p, "lm"); uSm = glGetUniformLocation(p, "sm"); uSs = glGetUniformLocation(p, "ss");
+  uM = glGetUniformLocation(p, "m"); uFog = glGetUniformLocation(p, "fog"); uLit = glGetUniformLocation(p, "lit"); uTx = glGetUniformLocation(p, "tx"); uSd = glGetUniformLocation(p, "sd"); uEy = glGetUniformLocation(p, "ey"); uTm = glGetUniformLocation(p, "tm"); uLm = glGetUniformLocation(p, "lm"); uSm = glGetUniformLocation(p, "sm"); uSs = glGetUniformLocation(p, "ss"); uLm2 = glGetUniformLocation(p, "lm2"); uSm2 = glGetUniformLocation(p, "sm2");
   GLuint bf; glGenBuffers(1, &bf); glBindBuffer(GL_ARRAY_BUFFER, bf);
   glEnableVertexAttribArray(0); glEnableVertexAttribArray(1);
   glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, (void*)0); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12);
@@ -588,14 +674,7 @@ int main() {
       "void main(){if(vc.b>1.5&&lfm(vc.xy)<.5)discard;vec4 e=fract(z*vec4(1.,255.,65025.,16581375.));e-=e.yzww*vec4(1./255.,1./255.,1./255.,0.);gl_FragColor=e;}";
     shProg = glCreateProgram(); glAttachShader(shProg, sh(GL_VERTEX_SHADER, svs)); glAttachShader(shProg, sh(GL_FRAGMENT_SHADER, sfs));
     glBindAttribLocation(shProg, 0, "p"); glBindAttribLocation(shProg, 1, "c"); glLinkProgram(shProg); uShLm = glGetUniformLocation(shProg, "lm");
-    glGenTextures(1, &shTex); glBindTexture(GL_TEXTURE_2D, shTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2048, 2048, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    GLuint rb; glGenRenderbuffers(1, &rb); glBindRenderbuffer(GL_RENDERBUFFER, rb); glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, 2048, 2048);
-    glGenFramebuffers(1, &shFbo); glBindFramebuffer(GL_FRAMEBUFFER, shFbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, shTex, 0); glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
-    shOk = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE; glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    shOk = shadowTarget(2048, shFbo, shTex); shOk2 = shadowTarget(1024, shFbo2, shTex2);
   }
   say("Лево: ходьба · Право: камера"); msgT = 6;
   py = meshH(0, 0);
