@@ -16,19 +16,24 @@ struct Fin { int id; float x, y, bx, by; };        // finger
 static vector<V> vb; static vector<Node> nodes; static vector<Blk> blks;
 static GLint uM, uFog, uLit, uTx, uSd, uEy, uTm, uLm, uSm, uSs, uShLm; static GLuint prog, shProg, shFbo, shTex; static bool shOk = false; static vector<V> sv; static float txOn = 1; static int W = 0, H = 0; static float K = 1;
 static float px = 0, py = 0, pz = 0, vy = 0, yaw = 0, pitch = 0, hp = 100, food = 100;
-static float tod = .1f, cd = 0, hudT = 0, msgT = 0; static int wood = 60, stone = 0, metal = 0, sulfur = 0, mode = 0; static float thirst = 100;
+static float tod = .1f, cd = 0, hudT = 0, msgT = 0; static int wood = 400, stone = 0, metal = 0, sulfur = 0, mode = 0; static float thirst = 100;
 static char msg[96] = ""; static bool inBush = false; static Fin st = {-1}, lk = {-1};
 static double last = 0; static unsigned rs = 12345;
 
 EM_JS(int, gk, (int i), { var v = window.G[i] | 0; if (i == 1) window.G[1] = 0; return v; });
 EM_JS(float, gf, (int i), { var v = window.G[i] || 0; if (i > 4) window.G[i] = 0; return v; });
+EM_JS(void, sfx, (int id), { if (window.audioEvent) window.audioEvent(id); });
+EM_JS(int, glbN, (const char* nm, int k), { var m = window.GL3 && window.GL3[UTF8ToString(nm)]; if (!m) return 0; return k == 0 ? m.v.length/6 : m.i.length; });
+EM_JS(void, glbV, (const char* nm, float* dst), { HEAPF32.set(window.GL3[UTF8ToString(nm)].v, dst >> 2); });
+EM_JS(void, glbI, (const char* nm, unsigned short* dst), { HEAPU16.set(window.GL3[UTF8ToString(nm)].i, dst >> 1); });
+EM_JS(void, texUp, (int id, int k), { var nm = ['bamboo','straw','twigs','door_front','door_back'][k], im = window.TEX && window.TEX[nm]; if (!im) return; var g = GLctx; g.bindTexture(g.TEXTURE_2D, GL.textures[id]); g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL, false); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, im); g.generateMipmap(g.TEXTURE_2D); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR_MIPMAP_LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.REPEAT); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.REPEAT); });
 EM_JS(void, aud, (int sf, int sp, int bu, float td, int jm), { if (window.audioState) window.audioState(sf, sp, bu, td, jm); });
 EM_JS(void, hud, (const char* s), { if (window.hudUpdate) window.hudUpdate(UTF8ToString(s)); });
 
-static const char* VS = "attribute vec3 p;attribute vec3 c;uniform mat4 m;uniform mat4 lm;uniform float tx;uniform float tm;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;"
-  "void main(){vec3 q=p;float o=0.;if(tx>1.5&&tx<2.5){o=.16*sin(tm*.7)+.1*sin(dot(p.xz,vec2(.06,.045))-tm*1.15);q.y+=o;}gl_Position=m*vec4(q,1.);vc=c;d=gl_Position.w;wp=q;ls=lm*vec4(q,1.);wo=o;}";
+static const char* VS = "attribute vec3 p;attribute vec3 c;uniform mat4 m;uniform mat4 lm;uniform mat4 mm;uniform float tx;uniform float tm;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;"
+  "void main(){vec3 q=p;float o=0.;if(tx>1.5&&tx<2.5){o=.16*sin(tm*.7)+.1*sin(dot(p.xz,vec2(.06,.045))-tm*1.15);q.y+=o;}vec4 w4=mm*vec4(q,1.);gl_Position=m*w4;vc=c;d=gl_Position.w;wp=w4.xyz;ls=lm*w4;wo=o;}";
 static const char* FS = "#extension GL_OES_standard_derivatives : enable\n"
-  "precision highp float;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;uniform vec3 fog;uniform vec3 sd;uniform vec3 ey;uniform float lit;uniform float tx;uniform float tm;uniform sampler2D sm;uniform float ss;"
+  "precision highp float;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;uniform vec3 fog;uniform vec3 sd;uniform vec3 ey;uniform float lit;uniform float tx;uniform float tm;uniform sampler2D sm;uniform float ss;uniform sampler2D t0;uniform sampler2D t1;uniform sampler2D t2;uniform sampler2D t3;uniform sampler2D t4;uniform float gt;"
   "float h(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}"
   "float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*f*(f*(f*6.-15.)+10.);return mix(mix(h(i),h(i+vec2(1.,0.)),f.x),mix(h(i+vec2(0.,1.)),h(i+vec2(1.,1.)),f.x),f.y);}"
   "float fb(vec2 p){float a=.5,s=0.;for(int i=0;i<5;i++){s+=a*n(p);p=mat2(.8,.6,-.6,.8)*p*2.03+vec2(17.1,9.2);a*=.5;}return s;}"
@@ -37,14 +42,15 @@ static const char* FS = "#extension GL_OES_standard_derivatives : enable\n"
   "float up(vec4 c){return dot(c,vec4(1.,1./255.,1./65025.,1./16581375.));}"
   "float shw(float bs){vec3 q=ls.xyz/ls.w*.5+.5;if(q.x<0.||q.x>1.||q.y<0.||q.y>1.||q.z>1.)return 1.;float s=(q.z-bs>up(texture2D(sm,q.xy)))?0.:1.;for(int i=0;i<8;i++){float a=float(i)*.785;vec2 o=vec2(cos(a),sin(a))*.0011;s+=(q.z-bs>up(texture2D(sm,q.xy+o)))?0.:1.;}float e=max(abs(q.x-.5),abs(q.y-.5))*2.;return mix(1.,s/9.,1.-smoothstep(.8,1.,e));}"
   "void main(){vec3 c=vc;float a=1.;"
-  "if(tx<.5){vec3 al=vc;vec3 N=normalize(cross(dFdx(wp),dFdy(wp)));if(dot(N,ey-wp)<0.)N=-N;bool fo=vc.b>1.5,rk=vc.r>5.&&!fo;"
+  "if(tx<.5){vec3 al=vc;vec3 N=normalize(cross(dFdx(wp),dFdy(wp)));if(dot(N,ey-wp)<0.)N=-N;bool pc=vc.b>19.5,fo=vc.b>1.5&&!pc,rk=vc.r>5.&&!fo&&!pc;"
   "if(fo){if(lfm(vc.xy)<.5)discard;float k=vc.b-2.,pl=floor(k+.01),t=(k-pl)/.99;vec3 a0,a1;if(pl<.5){a0=vec3(.07,.2,.05);a1=vec3(.45,.62,.14);}else if(pl<1.5){a0=vec3(.04,.14,.08);a1=vec3(.2,.42,.2);}else if(pl<2.5){a0=vec3(.1,.2,.05);a1=vec3(.38,.52,.14);}else if(pl<3.5){a0=vec3(.03,.11,.08);a1=vec3(.14,.3,.2);}else if(pl<4.5){a0=vec3(.08,.18,.07);a1=vec3(.26,.4,.16);}else{a0=vec3(.3,.26,.1);a1=vec3(.62,.55,.26);}al=mix(a0,a1,t)*(.85+.3*h(floor(vc.xy*5.)));if(pl>2.5&&pl<4.5)al=mix(al,vec3(.93,.96,1.),smoothstep(.15,.65,N.y)*.9);}"
   "if(rk){float m10=floor(vc.r/10.),mt=m10-1.,sn=0.;if(mt>7.5){mt-=8.;sn=1.;}vec3 bs=mt<.5?vec3(.62,.62,.64):(mt<1.5?vec3(.3,.2,.16):(mt<2.5?vec3(.2,.22,.17):(mt<3.5?vec3(.42,.4,.38):(mt<4.5?vec3(.2,.42,.16):(mt<5.5?vec3(.05,.15,.05):(mt<6.5?vec3(.08,.18,.07):vec3(.3,.26,.12)))))));"
   "float st=n(vec2(wp.y*5.+n(wp.xz*1.1)*3.,(wp.x+wp.z)*.35)),gr=n(wp.xz*16.+wp.y*13.),vz=abs(n(wp.xz*2.4+wp.y*2.1)-.5),vein=1.-smoothstep(0.,.05,vz);al=bs*(.7+.45*st)*(.82+.3*gr);"
   "if(mt<.5){al=mix(al,vec3(.35,.36,.4),vein*.7);al=mix(al,vec3(.9,.9,.92),smoothstep(.72,.8,n(wp.xz*9.+wp.y*8.))*.5);al=mix(al,vec3(.2,.36,.12),smoothstep(.62,.9,N.y)*smoothstep(.5,.7,n(wp.xz*5.))*.4*(1.-sn));}else if(mt<1.5){al=mix(al,vec3(.12,.07,.06),vein*.7);al=mix(al,vec3(.8,.4,.14),smoothstep(.66,.72,n(wp.xz*10.+wp.y*9.))*.85);}else if(mt<2.5){al=mix(al,vec3(.88,.82,.16),vein*.95);al=mix(al,vec3(.8,.78,.2),smoothstep(.7,.76,n(wp.xz*8.+wp.y*7.))*.6);}else if(mt>3.5&&mt<4.5){al*=.78+.3*abs(sin(vc.g*50.27))+.15*h(floor(wp.xz*11.+wp.y*7.));}"
   "if(mt>5.5&&mt<6.5)sn=1.;if(sn>.5)al=mix(al,vec3(.93,.96,1.),smoothstep(.3,.7,N.y)*.92);}"
+  "if(pc){float id=floor(vc.b-19.5);vec2 tc=vc.rg;al=id<.5?texture2D(t0,tc).rgb:(id<1.5?texture2D(t1,tc).rgb:(id<2.5?texture2D(t2,tc).rgb:(id<3.5?texture2D(t3,tc).rgb:(id<4.5?texture2D(t4,tc).rgb:(id<5.5?vec3(.16,.13,.11):vec3(.13,.12,.11))))));}"
   "vec3 L=normalize(sd);float dl=dot(N,L),dif=fo?(max(dl,0.)+.25*max(-dl,0.)):max(dl,0.),hm=.5+.5*N.y,si=clamp(L.y*2.5+.2,0.,1.),nt=1.-clamp(L.y*4.+.6,0.,1.);"
-  "float g=n(wp.xz*5.+wp.y*3.)*.55+n(wp.xz*19.+wp.y*11.)*.45;c=al*(fo?.8+.3*g:(rk?1.:.72+.56*g));float sh=1.;if(ss>.5)sh=shw(.0012+.004*(1.-dif));c*=(.22+.3*hm)*mix(vec3(.9,.95,1.1),vec3(.5,.65,1.25),nt)*mix(lit,.62,nt)+si*dif*sh*vec3(.95,.88,.72)+vec3(.45,.55,.95)*.5*max(-dl,0.)*nt;}"
+  "float g=n(wp.xz*5.+wp.y*3.)*.55+n(wp.xz*19.+wp.y*11.)*.45;c=al*(fo?.8+.3*g:((rk||pc)?1.:.72+.56*g));float sh=1.;if(ss>.5)sh=shw(.0012+.004*(1.-dif));c*=(.22+.3*hm)*mix(vec3(.9,.95,1.1),vec3(.5,.65,1.25),nt)*mix(lit,.62,nt)+si*dif*sh*vec3(.95,.88,.72)+vec3(.45,.55,.95)*.5*max(-dl,0.)*nt;if(gt>.5){vec3 gc=gt<1.5?vec3(.22,.6,1.):vec3(1.,.25,.2);c=gc*(.5+.6*dif+.3*hm);a=.6;}}"
   "else if(tx<1.5){vec2 p=wp.xz;float hh=wp.y,sl=1.-vc.g,bio=vc.b,li=vc.r,big=n(p*.07),mid=n(p*.6),fine=n(p*3.)*.5+n(p*13.)*.5;"
   "vec3 gr=mix(vec3(.2,.4,.12),vec3(.34,.5,.16),mid);gr=mix(gr,gr*vec3(1.35,1.1,.55),smoothstep(.45,.8,big)*.8);vec3 sa=mix(vec3(.74,.66,.46),vec3(.83,.75,.55),fine),ds=mix(vec3(.82,.6,.34),vec3(.92,.72,.44),mid),sw=mix(vec3(.86,.9,.97),vec3(.98,.99,1.),fine),rkc=mix(vec3(.46,.44,.4),vec3(.6,.57,.52),fine);"
   "float sf=1.-smoothstep(.8,2.3,hh+(n(p*.35)-.5)*1.6+(fine-.5)*.6),dz=smoothstep(.2,.8,bio)*(1.-smoothstep(1.2,1.8,bio)),sz=smoothstep(1.2,1.8,bio);"
@@ -153,14 +159,151 @@ static Blk ghost() {
   b.y = meshH(b.x, b.z);
   return b;
 }
+// ===================== building system (GLB pieces, ghost, snapping) =====================
+struct Pc { int type; float x, y, z, yaw; int hinge; float open, tgt; };   // 0 foundation 1 wall 2 doorway 3 window 4 half 5 low 6 ceiling 7 door
+static vector<Pc> pcs;
+static const float SC = .5f, CELL = 3.f, FT = 4.2f, CT = .12f;   // model scale, cell size, foundation/ceiling top above model origin
+static const float WHT[8] = {0, 2.72f, 2.72f, 2.72f, 1.25f, .9f, 0, 0};
+static const int COST[8] = {40, 20, 20, 20, 12, 8, 25, 15};
+static const char* MN[8] = {"foundation", "wall", "doorway", "window_wall", "half_wall", "low_wall", "ceiling", "door"};
+static const float ID4[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+static GLuint mVbo[8], mIbo[8], mTex[5], streamVbo; static int mCnt[8]; static bool mReady = false; static GLint uMm = -1, uShMm = -1, uGt = -1;
+static float boff = 0, brot = 0; static int bhinge = 1;
+struct Gh { bool on, ok; int type; float x, y, z, yaw; int hinge; char why[48]; };
+static Gh gh = {};
+#define WHY(s) snprintf(gh.why, sizeof gh.why, "%s", s)
+static void loc2w(const Pc& p, float lx, float lz, float& wx, float& wz) { float c = cosf(p.yaw), s = sinf(p.yaw); wx = p.x + lx*c + lz*s; wz = p.z - lx*s + lz*c; }
+static void w2l(const Pc& p, float x, float z, float& lx, float& lz) { float c = cosf(p.yaw), s = sinf(p.yaw), dx = x - p.x, dz = z - p.z; lx = dx*c - dz*s; lz = dx*s + dz*c; }
+static float topOf(const Pc& p) { return p.type == 0 ? p.y + FT : p.type == 6 ? p.y + CT : p.y + WHT[p.type]; }
+static void pcMat(float* M, const Pc& p) {
+  float s = SC, c = cosf(p.yaw), sn = sinf(p.yaw), mx = (p.type == 7 && p.hinge < 0) ? -1.f : 1.f;
+  float B[16] = {c*s*mx, 0, -sn*s*mx, 0,  0, s, 0, 0,  sn*s, 0, c*s, 0,  p.x, p.y, p.z, 1};
+  if (p.type == 7 && p.open > .001f) { float a = -p.open*1.5708f, ca = cosf(a), sa = sinf(a), pv = .9189f; float L[16] = {ca, 0, -sa, 0,  0, 1, 0, 0,  sa, 0, ca, 0,  pv*(1 - ca), 0, pv*sa, 1}; mul(M, B, L); }
+  else for (int i = 0; i < 16; i++) M[i] = B[i];
+}
+static void drawModel(int m, const float* M, bool sh) {
+  if (!mCnt[m]) return;
+  glUniformMatrix4fv(sh ? uShMm : uMm, 1, 0, M);
+  glBindBuffer(GL_ARRAY_BUFFER, mVbo[m]); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, (void*)0); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mIbo[m]); glDrawElements(GL_TRIANGLES, mCnt[m], GL_UNSIGNED_SHORT, 0);
+}
+static void useStream() { glBindBuffer(GL_ARRAY_BUFFER, streamVbo); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, (void*)0); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); }
+static void loadModels() {
+  glGenTextures(5, mTex);
+  for (int k = 0; k < 5; k++) { texUp(mTex[k], k); glActiveTexture(GL_TEXTURE2 + k); glBindTexture(GL_TEXTURE_2D, mTex[k]); }
+  glActiveTexture(GL_TEXTURE0); glGenBuffers(8, mVbo); glGenBuffers(8, mIbo);
+  for (int m = 0; m < 8; m++) {
+    int nv = glbN(MN[m], 0), ni = glbN(MN[m], 1); if (!nv || !ni) continue;
+    vector<V> v(nv); vector<unsigned short> ix(ni); glbV(MN[m], (float*)v.data()); glbI(MN[m], ix.data());
+    glBindBuffer(GL_ARRAY_BUFFER, mVbo[m]); glBufferData(GL_ARRAY_BUFFER, nv*sizeof(V), v.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mIbo[m]); glBufferData(GL_ELEMENT_ARRAY_BUFFER, ni*2, ix.data(), GL_STATIC_DRAW); mCnt[m] = ni;
+  }
+  useStream(); mReady = true;
+}
+static void pushOBB(float& x, float& z, float cx, float cz, float yaw, float hx, float hz) {
+  float c = cosf(yaw), s = sinf(yaw), dx = x - cx, dz = z - cz, lx = dx*c - dz*s, lz = dx*s + dz*c;
+  float qx = fminf(fmaxf(lx, -hx), hx), qz = fminf(fmaxf(lz, -hz), hz), ex = lx - qx, ez = lz - qz, d = hypotf(ex, ez);
+  if (d >= .4f) return;
+  if (d > 1e-4f) { lx = qx + ex/d*.4f; lz = qz + ez/d*.4f; }
+  else { float a = hx - fabsf(lx), b = hz - fabsf(lz); if (a < b) lx = (lx < 0 ? -1.f : 1.f)*(hx + .4f); else lz = (lz < 0 ? -1.f : 1.f)*(hz + .4f); }
+  x = cx + lx*c + lz*s; z = cz - lx*s + lz*c;
+}
+static void collidePcs() {
+  for (const auto& p : pcs) {
+    float top = topOf(p);
+    if (p.type == 0) { float lx, lz; w2l(p, px, pz, lx, lz); if (py < top - .35f && fabsf(lx) < 1.9f && fabsf(lz) < 1.9f) pushOBB(px, pz, p.x, p.z, p.yaw, 1.5f, 1.5f); }
+    else if (p.type >= 1 && p.type <= 5) {
+      if (!(py < top - .1f && py + 1.8f > p.y + .1f)) continue;
+      if (p.type == 2) { for (int sg = -1; sg <= 1; sg += 2) { float cx, cz; loc2w(p, sg*.91f, 0, cx, cz); pushOBB(px, pz, cx, cz, p.yaw, .45f, .15f); } }
+      else pushOBB(px, pz, p.x, p.z, p.yaw, 1.36f, .15f);
+    } else if (p.type == 7 && p.open < .5f && py < p.y + 1.9f) pushOBB(px, pz, p.x, p.z, p.yaw, .46f, .08f);
+  }
+}
+static float surfaceY(float x, float z, float feet, float base) {
+  float g = base;
+  for (const auto& p : pcs) if (p.type == 0 || p.type == 6) { float lx, lz; w2l(p, x, z, lx, lz); float top = topOf(p); if (fabsf(lx) < 1.5f && fabsf(lz) < 1.5f && feet >= top - .35f) g = fmaxf(g, top); }
+  return g;
+}
+static bool aimPoint(float& ax, float& ay, float& az) {   // view ray against terrain, floor slabs and walls
+  float cp = cosf(pitch), dx = -sinf(yaw)*cp, dy = sinf(pitch), dz = -cosf(yaw)*cp, ex = px, ey = py + 1.7f, ez = pz;
+  for (float t = .6f; t <= 9.f; t += .2f) {
+    float x = ex + dx*t, y = ey + dy*t, z = ez + dz*t; ax = x; ay = y; az = z;
+    if (y <= meshH(x, z)) return true;
+    for (const auto& p : pcs) {
+      float lx, lz; w2l(p, x, z, lx, lz);
+      if (p.type == 0 || p.type == 6) { float top = topOf(p); if (fabsf(lx) < 1.6f && fabsf(lz) < 1.6f && y <= top && y >= top - 1.2f) { ay = top; return true; } }
+      else if (p.type >= 1 && p.type <= 5 && fabsf(lx) < 1.5f && fabsf(lz) < .35f && y >= p.y && y <= p.y + WHT[p.type] + .2f) return true;
+    }
+  }
+  return false;
+}
+static void updGhost() {
+  float ev9 = gf(9), ev10 = gf(10); int sel = mode == 1 ? gk(8) - 1 : mode == 2 ? 7 : -1;
+  gh.on = false; if (sel < 0 || !mReady) return;
+  if (sel == 0) { boff = fminf(fmaxf(boff + ev9*.25f, -3.f), 6.f); brot += ev10*.2618f; } else if (sel == 7 && ev10 > .5f) bhinge = -bhinge;
+  gh.on = true; gh.ok = false; gh.type = sel; gh.hinge = bhinge; gh.why[0] = 0; gh.yaw = brot;
+  float ax, ay, az; bool hit = aimPoint(ax, ay, az); gh.x = ax; gh.y = ay; gh.z = az;
+  if (!hit) { WHY("Слишком далеко"); return; }
+  bool okp = false;
+  if (sel == 0) {
+    const Pc* nb = 0; float bd = 1e9f, bx = 0, bz = 0;
+    for (const auto& p : pcs) if (p.type == 0 && hypotf(p.x - ax, p.z - az) < 7.f) for (int k = 0; k < 4; k++) {
+      float lx = k == 0 ? CELL : k == 1 ? -CELL : 0.f, lz = k == 2 ? CELL : k == 3 ? -CELL : 0.f, wx, wz; loc2w(p, lx, lz, wx, wz);
+      bool occ = false; for (const auto& q : pcs) if (q.type == 0 && fabsf(q.x - wx) < .6f && fabsf(q.z - wz) < .6f) occ = true;
+      float d = hypotf(wx - ax, wz - az); if (!occ && d < bd) { bd = d; nb = &p; bx = wx; bz = wz; }
+    }
+    bool snap = nb && bd < 3.2f;
+    float x = snap ? bx : ax, z = snap ? bz : az, yw = snap ? nb->yaw : brot, mx = -1e9f, mn = 1e9f; Pc t = {0, x, 0, z, yw, 1, 0, 0};
+    for (int i = -2; i <= 2; i++) for (int j = -2; j <= 2; j++) { float wx, wz; loc2w(t, i*.75f, j*.75f, wx, wz); float h = meshH(wx, wz); mx = fmaxf(mx, h); mn = fminf(mn, h); }
+    float top = snap ? nb->y + FT : mx + .25f + boff, lo = mx + .15f, hi = mn + FT;
+    gh.x = x; gh.z = z; gh.yaw = yw; gh.y = top - FT;
+    bool ov = false; for (const auto& q : pcs) if (q.type == 0 && hypotf(q.x - x, q.z - z) < 2.5f) ov = true;
+    if (ov) WHY("Здесь занято"); else if (mn < -.1f) WHY("В воде"); else if (top < lo - .001f) WHY("Фундамент в земле"); else if (top > hi + .001f) WHY("Слишком высоко: ножки не достают"); else okp = true;
+  } else if (sel >= 1 && sel <= 5) {
+    float bd = 3.f; bool found = false;
+    for (const auto& s : pcs) if ((s.type == 0 || s.type == 6) && hypotf(s.x - ax, s.z - az) < 4.5f) {
+      float top = s.type == 0 ? s.y + FT : s.y + CT;
+      for (int k = 0; k < 4; k++) {
+        float lx = k == 0 ? 1.5f : k == 1 ? -1.5f : 0.f, lz = k == 2 ? 1.5f : k == 3 ? -1.5f : 0.f, wx, wz; loc2w(s, lx, lz, wx, wz);
+        float d = hypotf(wx - ax, wz - az) + fabsf(ay - top)*.3f; if (d < bd) { bd = d; found = true; gh.x = wx; gh.z = wz; gh.y = top; gh.yaw = s.yaw - (k < 2 ? 1.5708f : 0.f); }
+      }
+    }
+    if (!found) WHY("Наведите на край фундамента");
+    else { bool occ = false; for (const auto& q : pcs) if (q.type >= 1 && q.type <= 5 && fabsf(q.x - gh.x) < .4f && fabsf(q.z - gh.z) < .4f && fabsf(q.y - gh.y) < .5f) occ = true; if (occ) WHY("Здесь уже стена"); else okp = true; }
+  } else if (sel == 6) {
+    float bd = 3.4f; bool found = false, any = false;
+    for (const auto& w : pcs) {
+      if (w.type >= 1 && w.type <= 3) {
+        float s_ = sinf(w.yaw), c_ = cosf(w.yaw); int ps = ((px - w.x)*s_ + (pz - w.z)*c_ > 0) ? 1 : -1;
+        for (int sg = -1; sg <= 1; sg += 2) { float x = w.x + sg*s_*1.5f, z = w.z + sg*c_*1.5f, d = hypotf(x - ax, z - az) + (sg == ps ? 0.f : 1.f); if (d < bd) { bd = d; found = true; gh.x = x; gh.z = z; gh.yaw = w.yaw; gh.y = w.y + 2.72f; } }
+      } else if (w.type == 6) {
+        for (int k = 0; k < 4; k++) { float lx = k == 0 ? CELL : k == 1 ? -CELL : 0.f, lz = k == 2 ? CELL : k == 3 ? -CELL : 0.f, wx, wz; loc2w(w, lx, lz, wx, wz); float d = hypotf(wx - ax, wz - az); if (d < bd) { bd = d; found = true; gh.x = wx; gh.z = wz; gh.yaw = w.yaw; gh.y = w.y; } }
+      }
+    }
+    (void)any;
+    if (!found) WHY("Нужна стена или потолок рядом");
+    else { bool occ = false; for (const auto& q : pcs) if (q.type == 6 && fabsf(q.x - gh.x) < .6f && fabsf(q.z - gh.z) < .6f && fabsf(q.y - gh.y) < .5f) occ = true; if (occ) WHY("Здесь уже потолок"); else okp = true; }
+  } else {
+    float bd = 3.5f; bool found = false;
+    for (const auto& d : pcs) if (d.type == 2) {
+      bool has = false; for (const auto& q : pcs) if (q.type == 7 && fabsf(q.x - d.x) < .3f && fabsf(q.z - d.z) < .3f && fabsf(q.y - d.y) < .5f) has = true; if (has) continue;
+      float dd = hypotf(d.x - ax, d.z - az) + fabsf(d.y + 1.3f - ay)*.3f; if (dd < bd) { bd = dd; found = true; gh.x = d.x; gh.y = d.y; gh.z = d.z; gh.yaw = d.yaw; }
+    }
+    if (!found) WHY("Наведите на дверной проём"); else okp = true;
+  }
+  if (okp && wood < COST[sel]) { WHY("Не хватает дерева"); okp = false; }
+  gh.ok = okp;
+  if (!okp && gh.why[0]) say(gh.why);
+}
+static void place() {
+  if (!gh.on) { say("Выберите постройку в меню"); return; }
+  if (!gh.ok) { if (gh.why[0]) say(gh.why); return; }
+  pcs.push_back({gh.type, gh.x, gh.y, gh.z, gh.yaw, gh.hinge, 0.f, 0.f}); wood -= COST[gh.type]; sfx(1);
+}
 static void act() {
   cd = .4f; float fx = -sinf(yaw), fz = -cosf(yaw);
-  if (mode) {
-    Blk b = ghost(); int cost = mode == 1 ? 30 : 20;
-    if (wood < cost) { say("Нужно больше дерева"); return; }
-    for (auto& o : blks) if (o.x == b.x && o.z == b.z && o.wall == b.wall) return;
-    wood -= cost; blks.push_back(b); return;
-  }
+  if (mode) { place(); return; }
+  for (auto& d : pcs) if (d.type == 7) { float dx = d.x - px, dz = d.z - pz, dd = hypotf(dx, dz); if (dd < 3.2f && dx*fx + dz*fz > .4f*dd) { d.tgt = d.tgt > .5f ? 0.f : 1.f; return; } }
   Node* best = 0; float bd = 4.5f;
   for (auto& n : nodes) {
     if (n.hp <= 0 || n.type == 2 || n.type == 8 || n.type == 10) continue;
@@ -188,6 +331,7 @@ static EM_BOOL tc(int type, const EmscriptenTouchEvent* e, void*) {
   return EM_TRUE;
 }
 static void update(float dt) {
+  static bool mld = false; if (!mld && gk(11)) { loadModels(); mld = true; } for (auto& d : pcs) if (d.type == 7) d.open += (d.tgt - d.open)*fminf(1.f, dt*8.f);
   inBush = false; static bool mapDone = false; if (!mapDone && gk(7)) { genMap(); mapDone = true; } tod += dt/240; if (tod > 1) tod -= 1; cd -= dt; msgT -= dt;
   food -= dt*.4f; thirst = fmaxf(0.f, thirst - dt*.55f);
   if (food <= 0 || thirst <= 0) { food = fmaxf(food, 0.f); hp -= dt*2; } else if (food > 50 && thirst > 50 && hp < 100) hp = fminf(100, hp + dt*2);
@@ -201,12 +345,13 @@ static void update(float dt) {
     else if ((n.t -= dt) <= 0) n.hp = n.type == 0 || n.type == 7 ? 5 : n.type == 1 || n.type == 5 || n.type == 6 ? 7 : n.type == 3 ? 4 : n.type == 4 ? 5 : n.type == 9 ? 3 : 1;
   }
   for (auto& b : blks) if (b.wall) push(px, pz, b.x-b.w/2, b.z-b.d/2, b.x+b.w/2, b.z+b.d/2);
+  collidePcs();
   if (hgt(px, pz) < -.5f) { px = ox; pz = oz; }
-  float gy = meshH(px, pz); for (auto& b : blks) if (!b.wall && fabsf(px-b.x) < 2 && fabsf(pz-b.z) < 2) gy = fmaxf(gy, b.y + .3f);
+  float gy = surfaceY(px, pz, py, meshH(px, pz));
   bool jmp = false; if (gk(1) && py <= gy + .01f) { vy = 7; jmp = true; }
   vy -= 20*dt; py += vy*dt; if (py < gy + .25f && vy <= 0) { py = gy; vy = 0; }
   { float mag = hypotf(sx, sy), b2 = biomeAt(px, pz); bool grd = py <= gy + .05f; aud(b2 > 1.5f ? 2 : (b2 > .5f || gy < 1.6f) ? 1 : 0, (mag > .12f && grd) ? (mag > .95f ? 2 : 1) : 0, inBush ? 1 : 0, tod, jmp ? 1 : 0); }
-  mode = gk(2);
+  mode = gk(2); updGhost();
   if (gk(0) && cd <= 0) act();
 }
 static float TH[43][43], TX0, TZ0;
@@ -427,7 +572,9 @@ static void shadowDraw(const float* LM) {
   glBindFramebuffer(GL_FRAMEBUFFER, shFbo); glViewport(0, 0, 2048, 2048);
   glClearColor(1, 1, 1, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
   glUseProgram(shProg); glUniformMatrix4fv(uShLm, 1, 0, LM);
+  glUniformMatrix4fv(uShMm, 1, 0, ID4);
   glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(V), sv.data(), GL_STREAM_DRAW); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)sv.size());
+  if (mReady) { for (const auto& p : pcs) { float M[16]; pcMat(M, p); drawModel(p.type, M, true); } useStream(); }
   glBindFramebuffer(GL_FRAMEBUFFER, 0); glViewport(0, 0, W, H); glUseProgram(prog);
 }
 static void quadUV(float x, float y, float z, float ux, float uy, float uz, float vx, float vy, float vz, float e) {
@@ -524,8 +671,13 @@ static void render(float dt) {
   txOn = 2; water(); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); flush(A, sky, lt); glDisable(GL_BLEND);
   txOn = 0;
   vb.swap(sv);
-  if (mode) { Blk g = ghost(); bool ok = wood >= (mode == 1 ? 30 : 20); float gr = ok ? .3f : .9f, gg = ok ? .9f : .25f, gb = ok ? .3f : .2f; if (g.wall) box(g.x,g.y-1.2f,g.z,g.w,4.2f,g.d,gr,gg,gb); else box(g.x,g.y-1.2f,g.z,g.w,1.52f,g.d,gr,gg,gb); }
   flush(A, sky, .25f + .75f*k);
+  if (mReady) {
+    glUniformMatrix4fv(uM, 1, 0, A); glUniform3fv(uFog, 1, sky); glUniform1f(uLit, lt); glUniform1f(uTx, 0);
+    for (const auto& p : pcs) { float M[16]; pcMat(M, p); drawModel(p.type, M, false); }
+    if (gh.on) { Pc g = {gh.type, gh.x, gh.y, gh.z, gh.yaw, gh.hinge, 0.f, 0.f}; float M[16]; pcMat(M, g); glUniform1f(uGt, gh.ok ? 1.f : 2.f); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); drawModel(g.type, M, false); glDisable(GL_BLEND); glUniform1f(uGt, 0.f); }
+    useStream(); glUniformMatrix4fv(uMm, 1, 0, ID4);
+  }
   glDisable(GL_DEPTH_TEST);
   float I[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}, u = fminf(W, H)/400.f;
   if (st.id >= 0) {
@@ -576,18 +728,19 @@ int main() {
   auto gctx = emscripten_webgl_create_context("#canvas", &a); emscripten_webgl_make_context_current(gctx); emscripten_webgl_enable_extension(gctx, "OES_standard_derivatives");
   GLuint p = glCreateProgram(); glAttachShader(p, sh(GL_VERTEX_SHADER, VS)); glAttachShader(p, sh(GL_FRAGMENT_SHADER, FS));
   glBindAttribLocation(p, 0, "p"); glBindAttribLocation(p, 1, "c"); glLinkProgram(p); glUseProgram(p); prog = p;
-  uM = glGetUniformLocation(p, "m"); uFog = glGetUniformLocation(p, "fog"); uLit = glGetUniformLocation(p, "lit"); uTx = glGetUniformLocation(p, "tx"); uSd = glGetUniformLocation(p, "sd"); uEy = glGetUniformLocation(p, "ey"); uTm = glGetUniformLocation(p, "tm"); uLm = glGetUniformLocation(p, "lm"); uSm = glGetUniformLocation(p, "sm"); uSs = glGetUniformLocation(p, "ss");
-  GLuint bf; glGenBuffers(1, &bf); glBindBuffer(GL_ARRAY_BUFFER, bf);
+  uM = glGetUniformLocation(p, "m"); uFog = glGetUniformLocation(p, "fog"); uLit = glGetUniformLocation(p, "lit"); uTx = glGetUniformLocation(p, "tx"); uSd = glGetUniformLocation(p, "sd"); uEy = glGetUniformLocation(p, "ey"); uTm = glGetUniformLocation(p, "tm"); uLm = glGetUniformLocation(p, "lm"); uSm = glGetUniformLocation(p, "sm"); uSs = glGetUniformLocation(p, "ss"); uMm = glGetUniformLocation(p, "mm"); uGt = glGetUniformLocation(p, "gt"); glUniformMatrix4fv(uMm, 1, 0, ID4); { const char* tn[5] = {"t0", "t1", "t2", "t3", "t4"}; for (int k = 0; k < 5; k++) glUniform1i(glGetUniformLocation(p, tn[k]), 2 + k); }
+  { GLuint dt; glGenTextures(1, &dt); glBindTexture(GL_TEXTURE_2D, dt); unsigned char w4[4] = {255, 255, 255, 255}; glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, w4); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST); for (int k = 2; k <= 6; k++) { glActiveTexture(GL_TEXTURE0 + k); glBindTexture(GL_TEXTURE_2D, dt); } glActiveTexture(GL_TEXTURE0); }
+  GLuint bf; glGenBuffers(1, &bf); glBindBuffer(GL_ARRAY_BUFFER, bf); streamVbo = bf;
   glEnableVertexAttribArray(0); glEnableVertexAttribArray(1);
   glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, (void*)0); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12);
   {
-    const char* svs = "attribute vec3 p;attribute vec3 c;uniform mat4 lm;varying float z;varying vec3 vc;void main(){gl_Position=lm*vec4(p,1.);z=gl_Position.z*.5+.5;vc=c;}";
+    const char* svs = "attribute vec3 p;attribute vec3 c;uniform mat4 lm;uniform mat4 mm;varying float z;varying vec3 vc;void main(){gl_Position=lm*(mm*vec4(p,1.));z=gl_Position.z*.5+.5;vc=c;}";
     const char* sfs = "precision highp float;varying float z;varying vec3 vc;"
       "float h(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}"
       "float lf(vec2 q){vec2 i=floor(q),f=fract(q)-.5;float a=h(i)*6.283;f+=(vec2(h(i+7.),h(i+13.))-.5)*.3;vec2 r=vec2(cos(a)*f.x+sin(a)*f.y,-sin(a)*f.x+cos(a)*f.y);return 1.-step(1.,length(r/vec2(.52,.24)));}float lfm(vec2 u){return max(lf(u*5.),lf(u*6.+3.1))*step(length(u-.5),.5);}"
-      "void main(){if(vc.b>1.5&&lfm(vc.xy)<.5)discard;vec4 e=fract(z*vec4(1.,255.,65025.,16581375.));e-=e.yzww*vec4(1./255.,1./255.,1./255.,0.);gl_FragColor=e;}";
+      "void main(){if(vc.b>1.5&&vc.b<19.5&&lfm(vc.xy)<.5)discard;vec4 e=fract(z*vec4(1.,255.,65025.,16581375.));e-=e.yzww*vec4(1./255.,1./255.,1./255.,0.);gl_FragColor=e;}";
     shProg = glCreateProgram(); glAttachShader(shProg, sh(GL_VERTEX_SHADER, svs)); glAttachShader(shProg, sh(GL_FRAGMENT_SHADER, sfs));
-    glBindAttribLocation(shProg, 0, "p"); glBindAttribLocation(shProg, 1, "c"); glLinkProgram(shProg); uShLm = glGetUniformLocation(shProg, "lm");
+    glBindAttribLocation(shProg, 0, "p"); glBindAttribLocation(shProg, 1, "c"); glLinkProgram(shProg); uShLm = glGetUniformLocation(shProg, "lm"); uShMm = glGetUniformLocation(shProg, "mm"); glUseProgram(shProg); glUniformMatrix4fv(uShMm, 1, 0, ID4); glUseProgram(p);
     glGenTextures(1, &shTex); glBindTexture(GL_TEXTURE_2D, shTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2048, 2048, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
