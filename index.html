@@ -84,6 +84,38 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 .ico{position:absolute;width:15%;height:15%;margin:-7.5% 0 0 -7.5%;object-fit:contain;pointer-events:none}
 .ico.on{filter:brightness(0) invert(1)}
 #hole{inset:22%;padding:3%}
+
+#wmb{top:calc(12px + env(safe-area-inset-top));right:calc(78px + env(safe-area-inset-right));width:54px;height:54px;border-radius:12px}
+#mleg{position:absolute;left:0;right:0;bottom:calc(12px + env(safe-area-inset-bottom));text-align:center;color:#fff;font:600 13px -apple-system,system-ui,sans-serif;opacity:.85;pointer-events:none}
+#wm{position:fixed;inset:0;z-index:8;display:none;align-items:center;justify-content:center;background:rgba(4,10,16,.72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+#wm.on{display:flex}
+#wp{width:min(440px,92vw);max-height:92dvh;overflow:auto;box-sizing:border-box;padding:16px 18px 14px;color:#fff;font:600 15px/1.35 -apple-system,system-ui,sans-serif;background:rgba(22,28,32,.95);border:1px solid rgba(255,255,255,.22);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.55);-webkit-user-select:none;user-select:none}
+#wp h2{margin:0 0 2px;font:800 20px/1.2 -apple-system,system-ui,sans-serif}
+#wp .sub{margin:0 0 6px;font-weight:500;font-size:13px;opacity:.7}
+#wp label{display:flex;justify-content:space-between;align-items:baseline;margin:12px 0 6px}
+#wp label output{color:#f0b432;font-variant-numeric:tabular-nums}
+#wp .row{display:flex;gap:8px}
+#wp input[type=number]{flex:1;min-width:0;height:44px;box-sizing:border-box;padding:0 12px;color:#fff;font:700 18px -apple-system,system-ui,sans-serif;background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.3);border-radius:9px;outline:none;-webkit-user-select:text;user-select:text}
+#wp input[type=number]:focus{border-color:#f0b432}
+#wp input[type=range]{width:100%;height:30px;margin:0;accent-color:#f0b432}
+#wp button{position:static;flex-direction:row;height:44px;border-radius:9px;font-size:15px;background:rgba(255,255,255,.1);border:2px solid rgba(255,255,255,.3);box-shadow:none}
+#wp .row button{width:54px;font-size:22px}
+#wp .seg{display:flex;gap:6px}
+#wp .seg button{flex:1;min-width:0}
+#wp button.on{background:rgba(240,180,50,.92);border-color:#fff;color:#2a1c00}
+#wp label.chk{justify-content:flex-start;align-items:center;gap:10px;margin:14px 0 4px;font-weight:600;font-size:14px}
+#wp label.chk input{width:22px;height:22px;margin:0;accent-color:#f0b432}
+#winfo{min-height:18px;margin:8px 0 0;font-weight:500;font-size:12.5px;opacity:.65}
+#wp .acts{display:flex;gap:8px;margin-top:12px}
+#wp .acts button{flex:1}
+#wp .acts #wgo{flex:2;background:#3b8f4a;border-color:rgba(255,255,255,.55);font-size:16px}
+#wgen{position:fixed;inset:0;z-index:9;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#0b1218;color:#fff;font:700 18px -apple-system,system-ui,sans-serif}
+#wgen.on{display:flex}
+#wgen i{width:34px;height:34px;border:4px solid rgba(255,255,255,.2);border-top-color:#f0b432;border-radius:50%;animation:wsp .8s linear infinite}
+@keyframes wsp{to{transform:rotate(360deg)}}
+#mc{position:static;inset:auto}
+#wp .acts{position:sticky;bottom:-14px;margin:10px -18px -14px;padding:10px 18px 14px;background:rgba(22,28,32,.97)}
+@media(max-height:480px){#wp{padding:10px 14px 0}#wp h2{font-size:17px}#wp .sub{display:none}#wp label{margin:8px 0 4px}#wp input[type=number],#wp button{height:38px}#wp input[type=range]{height:24px}#wp label.chk{margin:8px 0 2px}#wp .acts{bottom:0;margin:8px -14px 0;padding:8px 14px 10px}#wp #wgo{font-size:15px}}
 </style>
 </head>
 <body>
@@ -92,8 +124,8 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 <div id="x">+</div>
 <div id="ctl"><button id="bMenu"><img src="icons/items/plan.png"></button><button id="bUp">▲</button><button id="bDn">▼</button><button id="bRot">⟳</button></div>
 <div id="bm"><div id="ring"><svg id="rsv" viewBox="0 0 200 200"></svg><div id="hole"><b id="bn"></b><span id="bd"></span><span id="bw"></span></div></div></div>
-<button id="mapb"><b>🗺️</b></button>
-<div id="map"><canvas id="mc" width="512" height="512"></canvas><div id="mx">✕ Закрыть</div></div>
+<button id="mapb"><b>🗺️</b></button><button id="wmb"><b>🌍</b></button>
+<div id="map"><canvas id="mc" width="512" height="512"></canvas><div id="mx">✕ Закрыть</div><div id="mleg">▬ дороги &nbsp;·&nbsp; ┄ тропы &nbsp;·&nbsp; <span style="color:#ffcd1e">■</span> платформы (РТ)</div></div>
 <div id="vig"></div>
 <button id="jump"><b>⤒</b>Прыжок</button>
 <button id="hit"><b>🪓</b><span id="hl">Удар</span></button>
@@ -101,8 +133,26 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 <div id="touch"></div><div id="jb"><i id="jk"></i></div>
 <div id="stats"><div class="st" id="hp"><u>✚</u><i></i><b>100</b></div><div class="st" id="th"><u>💧</u><i></i><b>100</b></div><div class="st" id="hu"><u>🍖</u><i></i><b>100</b></div></div>
 <div id="pad">ходьба</div>
+<div id="wm"><div id="wp">
+<h2>🌍 Генерация мира</h2>
+<p class="sub">Каждый сид — новый остров. Дороги, тропы и платформы подстраиваются под рельеф, а земля под ними выравнивается.</p>
+<label for="wseed">Сид</label>
+<div class="row"><input id="wseed" type="number" inputmode="numeric" min="0" max="999999999" step="1"><button id="wdice" title="Случайный сид">🎲</button></div>
+<label>Размер карты<output id="wszo"></output></label>
+<div class="seg" id="wsz"><button data-v="0">Малая</button><button data-v="1">Средняя</button><button data-v="2">Большая</button></div>
+<label for="wpl">Платформы (РТ)<output id="wplo"></output></label>
+<input id="wpl" type="range" min="2" max="20" step="1">
+<label>Дороги<output id="wlpo"></output></label>
+<div class="seg" id="wlp"><button data-v="0">Минимум</button><button data-v="1">Норма</button><button data-v="2">Много</button></div>
+<label for="wtr">Тропы<output id="wtro"></output></label>
+<input id="wtr" type="range" min="0" max="24" step="1">
+<label class="chk"><input id="wrand" type="checkbox"><span>Новый случайный мир при каждом запуске</span></label>
+<div id="winfo"></div>
+<div class="acts"><button id="wgo">Создать мир</button><button id="wcl">Закрыть</button></div>
+</div></div>
+<div id="wgen"><i></i><span>Генерация мира…</span></div>
 <script>
-window.G=[0,0,0,0,0,0,0,0,0,0,0,0];
+window.G=[0,0,0,0,0,0,0,0,0,0,0,0,0];   // G[12] = "generate a new world" request from the menu
 window.SU={walk_grass:"sounds/steps/walk_grass.mp3",run_grass:"sounds/steps/run_grass.mp3",walk_sand:"sounds/steps/walk_sand.mp3",run_sand:"sounds/steps/run_sand.mp3",walk_snow:"sounds/steps/walk_snow.mp3",run_snow:"sounds/steps/run_snow.mp3",jump_grass:"sounds/steps/jump_grass.mp3",bush:"sounds/ambient/bush.mp3",morning:"sounds/ambient/morning.mp3",evening:"sounds/ambient/evening.mp3",place:"sounds/build/place.m4a"};
 function glbParse(buf,reg){
   var dv=new DataView(buf),off=12,js=null,bin=null;
@@ -163,8 +213,8 @@ bm.addEventListener('pointerdown',function(e){if(e.target===bm){e.preventDefault
 bMenu.addEventListener('pointerdown',function(e){e.preventDefault();bm.classList.add('on');hi(G[8]?G[8]-1:-1);});
 window.slotChanged=function(){bm.classList.remove('on');upd();};
 bUp.addEventListener('pointerdown',function(e){e.preventDefault();G[9]+=1;});bDn.addEventListener('pointerdown',function(e){e.preventDefault();G[9]-=1;});bRot.addEventListener('pointerdown',function(e){e.preventDefault();G[10]+=1;});})();
-(function(){var mp=document.getElementById('map'),mc=document.getElementById('mc'),cx=mc.getContext('2d'),E=440;
-function draw(){if(!mp.classList.contains('on'))return;cx.clearRect(0,0,512,512);
+(function(){var mp=document.getElementById('map'),mc=document.getElementById('mc'),cx=mc.getContext('2d');
+function draw(){if(!mp.classList.contains('on'))return;var E=window.MAPE||440;cx.clearRect(0,0,512,512);
 if(window.mapCanvas){cx.imageSmoothingEnabled=true;cx.drawImage(window.mapCanvas,0,0,512,512);}else{cx.fillStyle='#fff';cx.font='20px sans-serif';cx.fillText('Загрузка карты…',170,256);}
 var P=window.PP;if(P){var x=(P.x+E)/(2*E)*512,y=(P.z+E)/(2*E)*512;cx.save();cx.translate(x,y);cx.rotate(-P.yaw);cx.fillStyle='#ff3b30';cx.strokeStyle='#fff';cx.lineWidth=2;cx.beginPath();cx.moveTo(0,-12);cx.lineTo(8,9);cx.lineTo(0,5);cx.lineTo(-8,9);cx.closePath();cx.fill();cx.stroke();cx.restore();}}
 window.mapDraw=draw;
@@ -209,12 +259,43 @@ on(hit,'pointerdown',function(){G[0]=1;hit.classList.add('on');});
 on(document.getElementById('jump'),'pointerdown',function(){G[1]=1;});
 sl.forEach(function(b){on(b,'pointerdown',function(){G[2]=+b.dataset.s;hl.textContent=G[2]?'Строить':'Удар';if(window.slotChanged)window.slotChanged();sl.forEach(function(x){x.classList.toggle('on',x===b);});});});
 })();
-var hud=document.getElementById('hud');
-function fail(m){hud.style.color='#ffb4a8';hud.style.whiteSpace='pre-wrap';hud.textContent=m;}
+(function(){
+var KEY='minirust.world.v2',$=function(i){return document.getElementById(i);},SZ=[1,1.4,1.8],SP=[5,8,12],KM=[.63,.88,1.13];
+var D={seed:0,size:1,plat:8,loops:1,trails:8,rand:true},cfg={},saved={},k;
+try{saved=JSON.parse(localStorage.getItem(KEY)||'{}')||{};}catch(e){}
+for(k in D)cfg[k]=saved[k]!==undefined?saved[k]:D[k];
+function rnd(){return 1+Math.floor(Math.random()*999999998);}
+var q=location.search.match(/[?&]seed=(\d{1,9})/);
+if(q){cfg.seed=+q[1];cfg.rand=false;}else if(cfg.rand||!(cfg.seed>0))cfg.seed=rnd();
+function push(){window.WC=[cfg.seed,SZ[cfg.size]||1.4,cfg.plat,cfg.loops,cfg.trails];}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(cfg));}catch(e){}}
+push();
+var wm=$('wm'),seed=$('wseed'),pl=$('wpl'),tr=$('wtr'),rd=$('wrand');
+function seg(id,v){var b=$(id).children,i;for(i=0;i<b.length;i++)b[i].classList.toggle('on',+b[i].dataset.v===v);}
+function ui(){seed.value=cfg.seed;seg('wsz',cfg.size);seg('wlp',cfg.loops);pl.value=cfg.plat;tr.value=cfg.trails;rd.checked=!!cfg.rand;
+$('wszo').textContent='≈ '+KM[cfg.size].toFixed(1)+' км';$('wplo').textContent=cfg.plat;$('wtro').textContent=cfg.trails;$('wlpo').textContent=['только цепочка','с петлями','много петель'][cfg.loops];}
+function open(){ui();wm.classList.add('on');}
+function close(){wm.classList.remove('on');}
+$('wmb').addEventListener('pointerdown',function(e){e.preventDefault();open();});
+$('wcl').addEventListener('click',close);
+wm.addEventListener('pointerdown',function(e){if(e.target===wm)close();});
+$('wdice').addEventListener('click',function(){cfg.seed=rnd();seed.value=cfg.seed;});
+seed.addEventListener('input',function(){var s=parseInt(seed.value,10);if(s>=0&&s<=999999999)cfg.seed=s;});   // keep a typed seed when other controls redraw the menu
+Array.prototype.forEach.call($('wsz').children,function(b){b.addEventListener('click',function(){cfg.size=+b.dataset.v;cfg.plat=SP[cfg.size];ui();});});
+Array.prototype.forEach.call($('wlp').children,function(b){b.addEventListener('click',function(){cfg.loops=+b.dataset.v;ui();});});
+pl.addEventListener('input',function(){cfg.plat=+pl.value;$('wplo').textContent=cfg.plat;});
+tr.addEventListener('input',function(){cfg.trails=+tr.value;$('wtro').textContent=cfg.trails;});
+$('wgo').addEventListener('click',function(){var s=parseInt(seed.value,10);cfg.seed=s>=0&&s<=999999999?s:rnd();cfg.rand=rd.checked;push();save();close();
+$('wgen').classList.add('on');requestAnimationFrame(function(){requestAnimationFrame(function(){setTimeout(function(){G[12]=1;},30);});});});
+window.worldReady=function(s,np,rk,tk){$('wgen').classList.remove('on');cfg.seed=s;
+$('winfo').textContent='Сид '+s+' · платформ '+np+' · дорог '+(rk/1000).toFixed(1)+' км · троп '+(tk/1000).toFixed(1)+' км';};
+})();
+function hudEl(){return document.getElementById('hud');}   // not a global `hud` variable: game.js defines a function with that name
+function fail(m){var g=document.getElementById('wgen');if(g)g.classList.remove('on');var h=hudEl();h.style.color='#ffb4a8';h.style.whiteSpace='pre-wrap';h.textContent=m;}
 window.onerror=function(m){fail('Ошибка: '+m);};
 window.onunhandledrejection=function(e){fail('Ошибка: '+(e.reason&&e.reason.message||e.reason));};
 var Module={canvas:document.getElementById('canvas'),print:console.log,printErr:console.warn,onAbort:function(w){fail('Сбой: '+w);}};
-setTimeout(function(){if(hud.textContent.indexOf('Загрузка')===0)fail('Игра не запустилась за 10 секунд.\nПроверьте Settings → Pages → Source: GitHub Actions и вкладку Actions.');},10000);
+setTimeout(function(){if(hudEl().textContent.indexOf('Загрузка')===0)fail('Игра не запустилась за 10 секунд.\nПроверьте Settings → Pages → Source: GitHub Actions и вкладку Actions.');},10000);
 </script>
 <script src="game.js" onerror="fail('Файл game.js не найден.\nSettings → Pages → Source → GitHub Actions, затем запустите Deploy во вкладке Actions.')"></script>
 </body>
