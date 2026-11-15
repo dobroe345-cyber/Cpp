@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#000000">
+<link rel="preload" href="game.wasm" as="fetch" type="application/wasm" crossorigin>
+<link rel="preload" href="game.js" as="script">
 <title>Mini-Rust</title>
 <style>
 html,body{margin:0;height:100%;background:#000;overflow:hidden;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
@@ -152,7 +154,7 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 </div></div>
 <div id="wgen"><i></i><span>Генерация мира…</span></div>
 <script>
-window.G=[0,0,0,0,0,0,0,0,0,0,0,0,0];   // G[12] = "generate a new world" request from the menu
+window.G=new Float64Array(16);   // input / event slots shared with the game (typed array: fast monomorphic access); G[12] = "generate a new world" request from the menu
 window.SU={walk_grass:"sounds/steps/walk_grass.mp3",run_grass:"sounds/steps/run_grass.mp3",walk_sand:"sounds/steps/walk_sand.mp3",run_sand:"sounds/steps/run_sand.mp3",walk_snow:"sounds/steps/walk_snow.mp3",run_snow:"sounds/steps/run_snow.mp3",jump_grass:"sounds/steps/jump_grass.mp3",bush:"sounds/ambient/bush.mp3",morning:"sounds/ambient/morning.mp3",evening:"sounds/ambient/evening.mp3",place:"sounds/build/place.m4a"};
 function glbParse(buf,reg){
   var dv=new DataView(buf),off=12,js=null,bin=null;
@@ -223,7 +225,7 @@ mp.addEventListener('pointerdown',function(e){e.preventDefault();mp.classList.re
 })();
 (function(){var AX=window.AudioContext||window.webkitAudioContext;if(!AX)return;var AC=new AX();
 var N=['walk_grass','run_grass','walk_sand','run_sand','walk_snow','run_snow','jump_grass','bush','morning','evening','place'],B={},L={},SF=['grass','sand','snow'];
-N.forEach(function(n){var x=new XMLHttpRequest();x.open('GET',window.SU[n]);x.responseType='arraybuffer';x.onload=function(){AC.decodeAudioData(x.response,function(b){B[n]=b;},function(){});};x.send();});
+var DQ=[],DB=false;function dpump(){if(DB||!DQ.length)return;DB=true;var a=DQ.shift(),nx=function(){DB=false;setTimeout(dpump,80);};try{AC.decodeAudioData(a[1],function(b){B[a[0]]=b;nx();},nx);}catch(e){nx();}}   // sounds are downloaded in parallel but decoded one at a time: no start-up burst\nN.forEach(function(n){var x=new XMLHttpRequest();x.open('GET',window.SU[n]);x.responseType='arraybuffer';x.onload=function(){DQ.push([n,x.response]);dpump();};x.send();});
 document.addEventListener('pointerdown',function(){if(AC.state!=='running')AC.resume();},{passive:true});
 function vol(n,v){v=Math.round(v*50)/50;if(!B[n]||AC.state!=='running')return;var l=L[n];
 if(!l){var g=AC.createGain();g.gain.value=0;g.connect(AC.destination);var s=AC.createBufferSource();s.buffer=B[n];s.loop=true;s.connect(g);s.start(0);l=L[n]={g:g,t:0};}
