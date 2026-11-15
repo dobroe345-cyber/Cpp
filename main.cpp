@@ -1,7 +1,23 @@
 // Mini-Rust: survival sandbox. C++ -> WebAssembly (Emscripten), touch controls for iPhone.
+// =====================================================================================================
+//  PERFORMANCE NOTES (what the engine does so that a big map stays fast)
+//   * terrain:   5-unit lattice cache (heights / normals / biome, 80x80 unit blocks) -> static indexed meshes, frustum culled
+//   * nodes:     trees / rocks live in 64x64 chunks (hash grid, SoA); 32x32 static batches per detail level (opaque / alpha-tested)
+//                baked once, rebuilt only when a node is harvested / respawns or the detail level changes; horizon occlusion culling
+//   * grass:     16x16 static batches, the wind runs in the vertex shader
+//   * shadows:   one cached shadow map, redrawn only when the sun moves, the player leaves the middle or a caster changes
+//   * pieces:    spatial hash grid (collision, aiming, snapping), cached matrices, sleeping doors, instanced drawing
+//   * streaming: everything near the player is generated / baked with a small per-frame time budget, far chunks are released
+//   * adaptation lattice and keep-clear map are sparse (memory grows with road length, not with the map area)
+//   * draw order: opaque -> terrain -> grass -> alpha-tested -> water (early z, no overdraw of the heavy terrain shader)
+//  Profiling: build with -DPROF, open the browser console: one "PROF {...}" line every 15 frames (CPU ms, draw calls, MB uploaded).
+//  Recommended build: see build.sh  (-O3 -flto -sGL_TRACK_ERRORS=0 -sMALLOC=emmalloc -sALLOW_MEMORY_GROWTH=1 ...)
+// =====================================================================================================
 #include <emscripten.h>
 #include <emscripten/html5.h>
+#define GL_GLEXT_PROTOTYPES 1
 #include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -9,14 +25,37 @@
 #include <queue>
 #include <cstring>
 #include <cstdlib>
+#include <unordered_map>
 using namespace std;
 
+
+#ifdef PROF   // build with -DPROF to get a per-frame CPU / draw call report in the browser console (zero cost otherwise)
+static double pT[32]; static long pC[8]; static int pFr = 0;
+struct PS { int i; double t0; PS(int i_) : i(i_), t0(emscripten_get_now()) {} ~PS() { pT[i] += emscripten_get_now() - t0; } };
+#define PS_CAT2(a, b) a##b
+#define PS_CAT(a, b) PS_CAT2(a, b)
+#define PROF_SCOPE(i) PS PS_CAT(_ps, __LINE__)(i)
+#define glDrawArrays(a, b, c) (pC[0]++, pC[2] += (c), glDrawArrays(a, b, c))
+#define glDrawElements(a, b, c, d) (pC[0]++, pC[2] += (b), glDrawElements(a, b, c, d))
+#define glDrawElementsInstancedANGLE(a, b, c, d, e) (pC[0]++, pC[2] += (long)(b)*(e), glDrawElementsInstancedANGLE(a, b, c, d, e))
+#define glBufferData(a, b, c, d) (pC[1] += (b), glBufferData(a, b, c, d))
+static int profNodes(); static int profChunks();
+static void profFrame() {
+  if (++pFr % 15) return;
+  char b[600]; snprintf(b, sizeof b, "PROF {\"frames\":15,\"upd\":%.2f,\"stream\":%.2f,\"shadow\":%.2f,\"world\":%.2f,\"frame\":%.2f,\"draws\":%ld,\"uploadKB\":%ld,\"verts\":%ld,\"occ\":%ld,\"nodes\":%d,\"chunks\":%d}",
+    pT[1]/15, pT[12]/15, pT[3]/15, pT[15]/15, pT[0]/15, pC[0]/15, pC[1]/15/1024, pC[2]/15, pC[3]/15, profNodes(), profChunks());
+  EM_ASM({ console.log(UTF8ToString($0)); }, b);
+  memset(pT, 0, sizeof pT); memset(pC, 0, sizeof pC);
+}
+#else
+#define PROF_SCOPE(i)
+#endif
 struct V { float x, y, z, r, g, b; };
 struct Node { float x, z, t; int type, hp; float y; };      // 0 tree, 1 rock, 2 berry bush
 struct Blk { float x, z, w, d; bool wall; float y; };       // building piece
 struct Fin { int id; float x, y, bx, by; };        // finger
 
-static vector<V> vb; static vector<Node> nodes; static vector<Blk> blks;
+static vector<V> vb; static vector<Blk> blks;
 static GLint uM, uFog, uLit, uTx, uSd, uEy, uTm, uLm, uSm, uSs, uShLm; static GLuint prog, shProg, shFbo, shTex; static bool shOk = false; static vector<V> sv; static float txOn = 1; static int W = 0, H = 0; static float K = 1;
 static float px = 0, py = 0, pz = 0, vy = 0, yaw = 0, pitch = 0, hp = 100, food = 100;
 static float tod = .1f, cd = 0, hudT = 0, msgT = 0; static int wood = 400, stone = 0, metal = 0, sulfur = 0, mode = 0; static float thirst = 100;
@@ -37,8 +76,10 @@ EM_JS(double, wcf, (int i, double d), { return window.WC && window.WC.length > i
 EM_JS(void, wready, (double seed, int np, double rk, double tk), { if (window.worldReady) window.worldReady(seed, np, rk, tk); });
 EM_JS(void, mapImg, (const unsigned char* p, int m, float e), { var c = document.createElement('canvas'); c.width = c.height = m; var g = c.getContext('2d'), d = g.createImageData(m, m); d.data.set(HEAPU8.subarray(p, p + m*m*4)); g.putImageData(d, 0, 0); window.mapCanvas = c; window.MAPE = e; });
 
-static const char* VS = "attribute vec3 p;attribute vec3 c;uniform mat4 m;uniform mat4 lm;uniform mat4 mm;uniform float tx;uniform float tm;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;"
-  "void main(){vec3 q=p;float o=0.;if(tx>1.5&&tx<2.5){o=.16*sin(tm*.7)+.1*sin(dot(p.xz,vec2(.06,.045))-tm*1.15);q.y+=o;}vec4 w4=mm*vec4(q,1.);gl_Position=m*w4;vc=c;d=gl_Position.w;wp=w4.xyz;ls=lm*w4;wo=o;}";
+static const char* VS = "attribute vec3 p;attribute vec3 c;attribute vec4 i0;attribute vec4 i1;attribute vec4 i2;attribute vec4 i3;uniform mat4 m;uniform mat4 lm;uniform mat4 mm;uniform float tx;uniform float tm;uniform float inst;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;"
+  "void main(){vec3 q=p,cc=c;float o=0.;if(tx>1.5&&tx<2.5){o=.16*sin(tm*.7)+.1*sin(dot(p.xz,vec2(.06,.045))-tm*1.15);q.y+=o;}"
+  "else if(tx>7.5&&c.r>1.5){cc.r-=2.;float w=sin(tm*2.+p.x*.7+p.z*.5)*.03;q.x+=w;q.z+=w*.5;}"   // grass tips (red channel +2) sway in the vertex shader
+  "vec4 w4=(inst>.5?mat4(i0,i1,i2,i3):mm)*vec4(q,1.);gl_Position=m*w4;vc=cc;d=gl_Position.w;wp=w4.xyz;ls=lm*w4;wo=o;}";
 static const char* FS = "#extension GL_OES_standard_derivatives : enable\n"
   "precision highp float;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;uniform vec3 fog;uniform vec3 sd;uniform vec3 ey;uniform float lit;uniform float tx;uniform float tm;uniform sampler2D sm;uniform float ss;uniform sampler2D t0;uniform sampler2D t1;uniform sampler2D t2;uniform sampler2D t3;uniform sampler2D t4;uniform sampler2D t5;uniform float gt;uniform sampler2D rm;uniform vec3 rmo;"
   "float h(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}"
@@ -48,7 +89,7 @@ static const char* FS = "#extension GL_OES_standard_derivatives : enable\n"
   "float lf(vec2 q){vec2 i=floor(q),f=fract(q)-.5;float a=h(i)*6.283;f+=(vec2(h(i+7.),h(i+13.))-.5)*.3;vec2 r=vec2(cos(a)*f.x+sin(a)*f.y,-sin(a)*f.x+cos(a)*f.y);return 1.-step(1.,length(r/vec2(.52,.24)));}float lfm(vec2 u){return max(lf(u*5.),lf(u*6.+3.1))*step(length(u-.5),.5);}"
   "float up(vec4 c){return dot(c,vec4(1.,1./255.,1./65025.,1./16581375.));}"
   "float shw(float bs){vec3 q=ls.xyz/ls.w*.5+.5;if(q.x<0.||q.x>1.||q.y<0.||q.y>1.||q.z>1.)return 1.;float s=(q.z-bs>up(texture2D(sm,q.xy)))?0.:1.;for(int i=0;i<8;i++){float a=float(i)*.785;vec2 o=vec2(cos(a),sin(a))*.0011;s+=(q.z-bs>up(texture2D(sm,q.xy+o)))?0.:1.;}float e=max(abs(q.x-.5),abs(q.y-.5))*2.;return mix(1.,s/9.,1.-smoothstep(.8,1.,e));}"
-  "void main(){vec3 c=vc;float a=1.;"
+  "void main(){if(tx>.5&&tx<1.5&&d>=110.){gl_FragColor=vec4(fog,1.);return;}vec3 c=vc;float a=1.;"
   "if(tx<.5){vec3 al=vc;vec3 N=normalize(cross(dFdx(wp),dFdy(wp)));if(dot(N,ey-wp)<0.)N=-N;bool pc=vc.b>19.5,fo=vc.b>1.5&&!pc,rk=vc.r>5.&&!fo&&!pc;"
   "if(fo){if(lfm(vc.xy)<.5)discard;float k=vc.b-2.,pl=floor(k+.01),t=(k-pl)/.99;vec3 a0,a1;if(pl<.5){a0=vec3(.07,.2,.05);a1=vec3(.45,.62,.14);}else if(pl<1.5){a0=vec3(.04,.14,.08);a1=vec3(.2,.42,.2);}else if(pl<2.5){a0=vec3(.1,.2,.05);a1=vec3(.38,.52,.14);}else if(pl<3.5){a0=vec3(.03,.11,.08);a1=vec3(.14,.3,.2);}else if(pl<4.5){a0=vec3(.08,.18,.07);a1=vec3(.26,.4,.16);}else{a0=vec3(.3,.26,.1);a1=vec3(.62,.55,.26);}al=mix(a0,a1,t)*(.85+.3*h(floor(vc.xy*5.)));if(pl>2.5&&pl<4.5)al=mix(al,vec3(.93,.96,1.),smoothstep(.15,.65,N.y)*.9);}"
   "if(rk){float m10=floor(vc.r/10.),mt=m10-1.,sn=0.;if(mt>7.5){mt-=8.;sn=1.;}vec3 bs=mt<.5?vec3(.62,.62,.64):(mt<1.5?vec3(.3,.2,.16):(mt<2.5?vec3(.2,.22,.17):(mt<3.5?vec3(.42,.4,.38):(mt<4.5?vec3(.2,.42,.16):(mt<5.5?vec3(.05,.15,.05):(mt<6.5?vec3(.08,.18,.07):vec3(.3,.26,.12)))))));"
@@ -110,28 +151,68 @@ static float hgtB(float x, float z) {   // natural terrain, island radius ~330*M
   if (h < -.2f) h = -.2f + (h + .2f)*3.f;
   return h;
 }
-static const float AC = 2.5f; static int AN = 0; static float AO = 0.f; static vector<float> aW, aH;   // terrain adaptation: weight and weight*height at every lattice node (roads / platforms level the ground)
+static const float AC = 2.5f; static int AN = 0; static float AO = 0.f;   // terrain adaptation lattice (roads / platforms level the ground), stored sparsely in 16x16 node blocks
+struct ABlock { float w[256], wh[256]; unsigned short gen[256]; };   // weight, weight*height, id of the polyline that wrote the node
+static vector<ABlock*> aTab; static int ABN = 0; static unsigned short aGen = 0;
+static void adjInit(int an) { for (size_t i = 0; i < aTab.size(); i++) delete aTab[i]; AN = an; ABN = (an >> 4) + 1; aTab.assign((size_t)ABN*ABN, (ABlock*)0); }
+static inline ABlock* adjBlk(int i, int j, bool make) {
+  ABlock*& b = aTab[(size_t)(j >> 4)*ABN + (i >> 4)];
+  if (!b && make) { b = new ABlock(); memset(b->w, 0, sizeof b->w); memset(b->wh, 0, sizeof b->wh); memset(b->gen, 0, sizeof b->gen); }
+  return b;
+}
 static void adjAt(float x, float z, float& w, float& wh) {
   w = wh = 0.f; if (!AN) return;
   float fx = (x - AO)/AC, fz = (z - AO)/AC; int ix = (int)floorf(fx), iz = (int)floorf(fz);
   if (ix < 0 || iz < 0 || ix >= AN - 1 || iz >= AN - 1) return;
-  float u = fx - ix, v = fz - iz; const float* a = aW.data() + (size_t)iz*AN + ix; const float* b = aH.data() + (size_t)iz*AN + ix;
-  w = (a[0]*(1 - u) + a[1]*u)*(1 - v) + (a[AN]*(1 - u) + a[AN+1]*u)*v;
-  wh = (b[0]*(1 - u) + b[1]*u)*(1 - v) + (b[AN]*(1 - u) + b[AN+1]*u)*v;
+  float u = fx - ix, v = fz - iz, a[4] = {0, 0, 0, 0}, b[4] = {0, 0, 0, 0}; bool any = false;
+  for (int k = 0; k < 4; k++) { int i = ix + (k & 1), j = iz + (k >> 1); const ABlock* B = aTab[(size_t)(j >> 4)*ABN + (i >> 4)]; if (B) { int q = (j & 15)*16 + (i & 15); a[k] = B->w[q]; b[k] = B->wh[q]; any = true; } }
+  if (!any) return;
+  w = (a[0]*(1 - u) + a[1]*u)*(1 - v) + (a[2]*(1 - u) + a[3]*u)*v;
+  wh = (b[0]*(1 - u) + b[1]*u)*(1 - v) + (b[2]*(1 - u) + b[3]*u)*v;
 }
 static float hgt(float x, float z) {   // terrain height = natural terrain, levelled under roads, trails and platforms
   float h = hgtB(x, z), w, wh; adjAt(x, z, w, wh);
   if (w > 1e-4f) h += (wh/w - h)*fminf(w, 1.f);
   return h;
 }
-static float meshH(float x, float z, float* slope = 0) {   // height of the rendered terrain triangle at (x,z)
+// ---- terrain cache: heights, normals, biome and water quads of every 80x80 unit block are computed once and shared by the mesh, physics, nodes and grass ----
+static const int TCN = 16, TCV = TCN + 1;   // 16x16 cells of 5 units per block
+struct TChunk { int cx, cz; unsigned vbo, wvbo; bool up, wup; int wn; float y0, y1; float h[TCV*TCV]; V v[TCV*TCV]; vector<V> wv; };
+static unordered_map<long long, TChunk*> tcm; static vector<TChunk*> tcPool; static TChunk* tcLast = 0;
+static inline long long ckey(int a, int b) { return ((long long)a << 32) ^ (long long)(unsigned)b; }
+static TChunk* tcMake(int cx, int cz) {
+  TChunk* c; if (!tcPool.empty()) { c = tcPool.back(); tcPool.pop_back(); } else { c = new TChunk(); c->vbo = c->wvbo = 0; }
+  c->cx = cx; c->cz = cz; c->up = c->wup = false; c->wv.clear(); float y0 = 1e9f, y1 = -1e9f;
+  for (int j = 0; j < TCV; j++) for (int i = 0; i < TCV; i++) {
+    float x = (cx*TCN + i)*5.f, z = (cz*TCN + j)*5.f, h = hgt(x, z);
+    float dx = hgt(x - 2, z) - hgt(x + 2, z), dz = hgt(x, z - 2) - hgt(x, z + 2), l = sqrtf(dx*dx + 16 + dz*dz);
+    c->h[j*TCV + i] = h; V t = {x, h, z, .5f + .5f*fmaxf(0.f, (dx*.4f + 3.f - dz*.5f)/l), 4/l, biomeAt(x, z)}; c->v[j*TCV + i] = t;
+    y0 = fminf(y0, h); y1 = fmaxf(y1, h);
+  }
+  for (int j = 0; j < TCN; j++) for (int i = 0; i < TCN; i++) {
+    float a = c->h[j*TCV + i], b = c->h[j*TCV + i + 1], d = c->h[(j+1)*TCV + i], e = c->h[(j+1)*TCV + i + 1];
+    if (fminf(fminf(a, b), fminf(d, e)) > .5f) continue;
+    static const int Q[6][2] = {{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
+    for (int k = 0; k < 6; k++) { int ii = i + Q[k][0], jj = j + Q[k][1]; V t = {(cx*TCN + ii)*5.f, -.2f, (cz*TCN + jj)*5.f, -.2f - c->h[jj*TCV + ii], 0, 0}; c->wv.push_back(t); }
+  }
+  c->wn = (int)c->wv.size(); if (c->wn) y0 = fminf(y0, -.2f);
+  c->y0 = y0; c->y1 = y1; return c;
+}
+static TChunk* tcGet(int cx, int cz) {   // find or build (the last hit is remembered: physics and node placement ask for the same block again and again)
+  if (tcLast && tcLast->cx == cx && tcLast->cz == cz) return tcLast;
+  long long k = ckey(cx, cz); auto it = tcm.find(k); if (it != tcm.end()) return tcLast = it->second;
+  TChunk* c = tcMake(cx, cz); tcm[k] = c; return tcLast = c;
+}
+static float meshH(float x, float z, float* slope = 0) {   // height of the rendered terrain triangle at (x,z), read from the cache
   float fx = x/5.f, fz = z/5.f; int gx = (int)floorf(fx), gz = (int)floorf(fz); float u = fx - gx, v = fz - gz;
-  float h00 = hgt(gx*5.f, gz*5.f), h10 = hgt((gx+1)*5.f, gz*5.f), h01 = hgt(gx*5.f, (gz+1)*5.f), h11 = hgt((gx+1)*5.f, (gz+1)*5.f), h, sx, sz;
+  const float* H = tcGet(gx >> 4, gz >> 4)->h + (gz & 15)*TCV + (gx & 15);
+  float h00 = H[0], h10 = H[1], h01 = H[TCV], h11 = H[TCV + 1], h, sx, sz;
   if (u >= v) { h = h00 + (h10 - h00)*u + (h11 - h10)*v; sx = (h10 - h00)/5.f; sz = (h11 - h10)/5.f; }
   else { h = h00 + (h11 - h01)*u + (h01 - h00)*v; sx = (h11 - h01)/5.f; sz = (h01 - h00)/5.f; }
   if (slope) *slope = sqrtf(sx*sx + sz*sz);
   return h;
 }
+
 // ===================== procedural world: platforms, roads, trails (pure CPU, no GL) =====================
 struct Poly { int type; vector<float> x, z, h, s; };   // type 0 = road, 1 = trail; points every ~2 units
 // Platform = placeholder for a future monument (RT): centre x,z, rotation yaw, half sizes hx,hz, ground height h. Roads lead to its centre, trees keep off it.
@@ -157,42 +238,46 @@ static float rectSdf(const Plat& p, float x, float z) {   // signed distance to 
   return hypotf(fmaxf(qx, 0.f), fmaxf(qz, 0.f)) + fminf(fmaxf(qx, qz), 0.f);
 }
 // ---- terrain adaptation: flatten the ground under roads and platforms ----
-static void adjPut(int c, float w, float ht) {
-  float wo = aW[c], ho = wo > 1e-5f ? aH[c]/wo : ht, a = wo*wo, b = w*w, hn = a + b > 1e-9f ? (a*ho + b*ht)/(a + b) : ht, wn = fmaxf(wo, w);
-  aW[c] = wn; aH[c] = wn*hn;
+static void adjPut(int i, int j, float w, float ht) {
+  ABlock* B = adjBlk(i, j, true); int q = (j & 15)*16 + (i & 15);
+  float wo = B->w[q], ho = wo > 1e-5f ? B->wh[q]/wo : ht, a = wo*wo, b = w*w, hn = a + b > 1e-9f ? (a*ho + b*ht)/(a + b) : ht, wn = fmaxf(wo, w);
+  B->w[q] = wn; B->wh[q] = wn*hn; B->gen[q] = aGen;
 }
-static void stampSeg(float x0, float z0, float h0, float x1, float z1, float h1, float core, float blend, float wmax, const vector<float>* lock) {
+static void stampSeg(float x0, float z0, float h0, float x1, float z1, float h1, float core, float blend, float wmax, bool lockOld) {   // lockOld: nodes that an older polyline / platform already levelled completely are left alone
   float R = core + blend;
   int i0 = max(0, (int)floorf((fminf(x0, x1) - R - AO)/AC)), i1 = min(AN - 1, (int)ceilf((fmaxf(x0, x1) + R - AO)/AC));
   int j0 = max(0, (int)floorf((fminf(z0, z1) - R - AO)/AC)), j1 = min(AN - 1, (int)ceilf((fmaxf(z0, z1) + R - AO)/AC));
   for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
-    if (lock && (*lock)[(size_t)j*AN + i] >= .999f) continue;
+    if (lockOld) { const ABlock* B = adjBlk(i, j, false); if (B) { int q = (j & 15)*16 + (i & 15); if (B->w[q] >= .999f && B->gen[q] != aGen) continue; } }
     float t, d = segD(AO + i*AC, AO + j*AC, x0, z0, x1, z1, &t); if (d >= R) continue;
-    adjPut(j*AN + i, wmax*(1.f - sstep(core, R, d)), h0 + (h1 - h0)*t);
+    adjPut(i, j, wmax*(1.f - sstep(core, R, d)), h0 + (h1 - h0)*t);
   }
 }
 static void stampPlat(const Plat& p, float core, float blend) {
   float R = hypotf(p.hx, p.hz) + core + blend;
   int i0 = max(0, (int)floorf((p.x - R - AO)/AC)), i1 = min(AN - 1, (int)ceilf((p.x + R - AO)/AC)), j0 = max(0, (int)floorf((p.z - R - AO)/AC)), j1 = min(AN - 1, (int)ceilf((p.z + R - AO)/AC));
   for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
-    float d = rectSdf(p, AO + i*AC, AO + j*AC) - core; adjPut(j*AN + i, 1.f - sstep(0.f, blend, fmaxf(d, 0.f)), p.h);
+    float d = rectSdf(p, AO + i*AC, AO + j*AC) - core; adjPut(i, j, 1.f - sstep(0.f, blend, fmaxf(d, 0.f)), p.h);
   }
 }
-// ---- keep-clear map (trees / rocks stay off roads and platforms) ----
-static const float CC = 2.f; static int CN = 0; static vector<unsigned char> CL;
+// ---- keep-clear map (trees / rocks stay off roads and platforms), sparse 32x32 cell blocks ----
+static const float CC = 2.f; static int CN = 0, CBN = 0; static vector<unsigned char*> cTab;
+static void clrInit(int cn) { for (size_t i = 0; i < cTab.size(); i++) delete[] cTab[i]; CN = cn; CBN = (cn >> 5) + 1; cTab.assign((size_t)CBN*CBN, (unsigned char*)0); }
+static inline void clrSet(int i, int j) { unsigned char*& b = cTab[(size_t)(j >> 5)*CBN + (i >> 5)]; if (!b) { b = new unsigned char[1024]; memset(b, 0, 1024); } b[(j & 31)*32 + (i & 31)] = 1; }
 static void clrSeg(float x0, float z0, float x1, float z1, float r) {
   int i0 = max(0, (int)floorf((fminf(x0, x1) - r + WE)/CC)), i1 = min(CN - 1, (int)floorf((fmaxf(x0, x1) + r + WE)/CC));
   int j0 = max(0, (int)floorf((fminf(z0, z1) - r + WE)/CC)), j1 = min(CN - 1, (int)floorf((fmaxf(z0, z1) + r + WE)/CC));
-  for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) if (segD(-WE + (i + .5f)*CC, -WE + (j + .5f)*CC, x0, z0, x1, z1) <= r) CL[j*CN + i] = 1;
+  for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) if (segD(-WE + (i + .5f)*CC, -WE + (j + .5f)*CC, x0, z0, x1, z1) <= r) clrSet(i, j);
 }
 static void clrPlat(const Plat& p, float m) {
   float R = hypotf(p.hx, p.hz) + m + 2.f;
   int i0 = max(0, (int)floorf((p.x - R + WE)/CC)), i1 = min(CN - 1, (int)floorf((p.x + R + WE)/CC)), j0 = max(0, (int)floorf((p.z - R + WE)/CC)), j1 = min(CN - 1, (int)floorf((p.z + R + WE)/CC));
-  for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) if (rectSdf(p, -WE + (i + .5f)*CC, -WE + (j + .5f)*CC) <= m) CL[j*CN + i] = 1;
+  for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) if (rectSdf(p, -WE + (i + .5f)*CC, -WE + (j + .5f)*CC) <= m) clrSet(i, j);
 }
 static bool blockedAt(float x, float z) {
   if (!CN) return false; int i = (int)floorf((x + WE)/CC), j = (int)floorf((z + WE)/CC);
-  return i >= 0 && j >= 0 && i < CN && j < CN && CL[j*CN + i];
+  if (i < 0 || j < 0 || i >= CN || j >= CN) return false;
+  const unsigned char* b = cTab[(size_t)(j >> 5)*CBN + (i >> 5)]; return b && b[(j & 31)*32 + (i & 31)];
 }
 // ---- route-finding grid ----
 static const float GC = 4.f; static int GN = 0; static float GO = 0.f;
@@ -281,10 +366,10 @@ static void finalizePoly(Poly& P) {   // arc length, height profile, flatten the
   P.s.assign(n, 0.f); for (int i = 1; i < n; i++) P.s[i] = P.s[i-1] + hypotf(P.x[i] - P.x[i-1], P.z[i] - P.z[i-1]);
   profile(P);
   bool road = P.type == 0; float core = road ? RHW + RSH + 2.4f : THW + 1.f, blend = road ? 9.f : 4.5f, wmax = road ? 1.f : .6f, kc = road ? 5.6f : 1.8f, dr = road ? 18.f : 9.f;
-  vector<float>& DF = road ? gRd : gTd; static vector<float> lockW; lockW = aW;   // what was already levelled before this polyline
+  vector<float>& DF = road ? gRd : gTd; aGen = (unsigned short)(aGen + 1); if (!aGen) aGen = 1;   // every polyline gets its own id (platforms use 0)
   for (int i = 0; i + 1 < n; i++) {
     float x0 = P.x[i], z0 = P.z[i], x1 = P.x[i+1], z1 = P.z[i+1];
-    stampSeg(x0, z0, P.h[i], x1, z1, P.h[i+1], core, blend, wmax, &lockW); clrSeg(x0, z0, x1, z1, kc);
+    stampSeg(x0, z0, P.h[i], x1, z1, P.h[i+1], core, blend, wmax, true); clrSeg(x0, z0, x1, z1, kc);
     int i0 = max(0, (int)floorf((fminf(x0, x1) - dr - GO)/GC)), i1 = min(GN - 1, (int)floorf((fmaxf(x0, x1) + dr - GO)/GC)), j0 = max(0, (int)floorf((fminf(z0, z1) - dr - GO)/GC)), j1 = min(GN - 1, (int)floorf((fmaxf(z0, z1) + dr - GO)/GC));
     for (int j = j0; j <= j1; j++) for (int ii = i0; ii <= i1; ii++) { float d = segD(GO + (ii + .5f)*GC, GO + (j + .5f)*GC, x0, z0, x1, z1); if (d < DF[j*GN + ii]) DF[j*GN + ii] = d; }
   }
@@ -371,8 +456,8 @@ static void genWorld(const Cfg& c) {
   unsigned sd = (unsigned)c.seed; SD = sd*2654435761u + 0x9E3779B9u; SD ^= SD >> 15; SD *= 2246822519u; SD ^= SD >> 13;
   gsd = SD | 1u; MS = fminf(fmaxf(c.size, .6f), 2.4f); WE = 440.f*MS; bioRot = ((SD >> 5) & 0xffff)/65536.f;
   polys.clear(); plats.clear(); WS.nPlat = WS.nRoad = WS.nTrail = WS.unlinked = 0; WS.roadLen = WS.trailLen = 0.f;
-  AN = (int)ceilf(2*WE/AC) + 3; AO = -WE - AC; aW.assign((size_t)AN*AN, 0.f); aH.assign((size_t)AN*AN, 0.f);
-  CN = (int)ceilf(2*WE/CC) + 1; CL.assign((size_t)CN*CN, 0);
+  aGen = 0; adjInit((int)ceilf(2*WE/AC) + 3); AO = -WE - AC;
+  clrInit((int)ceilf(2*WE/CC) + 1);
   GN = (int)ceilf(2*WE/GC); GO = -WE; int NC = GN*GN;
   gH.assign(NC, 0.f); gS.assign(NC, 0.f); gNz.assign(NC, 0.f); gRd.assign(NC, 1e9f); gTd.assign(NC, 1e9f); gOk.assign(NC, 0); gPl.assign(NC, 0);
   for (int j = 0; j < GN; j++) for (int i = 0; i < GN; i++) { float x = GO + (i + .5f)*GC, z = GO + (j + .5f)*GC; gH[j*GN + i] = hgtB(x, z); gNz[j*GN + i] = pn(x*.02f + 7.f, z*.02f + 3.f); }
@@ -543,8 +628,10 @@ static void disc(float cx, float cy, float rad, float r, float g, float b, int n
     Q(cx, cy); Q(cx + rad*cosf(a0), cy + rad*sinf(a0)); Q(cx + rad*cosf(a1), cy + rad*sinf(a1));
   }
 }
+static GLuint streamVbo;   // the dynamic vertex buffer (sky, HUD, ghost)
 static void flush(const float* m, const float* fog, float lit) {
   glUniformMatrix4fv(uM, 1, 0, m); glUniform3fv(uFog, 1, fog); glUniform1f(uLit, lit); glUniform1f(uTx, txOn);
+  glBindBuffer(GL_ARRAY_BUFFER, streamVbo); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, (void*)0); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12);
   glBufferData(GL_ARRAY_BUFFER, vb.size()*sizeof(V), vb.data(), GL_STREAM_DRAW);
   glDrawArrays(GL_TRIANGLES, 0, (GLsizei)vb.size()); vb.clear();
 }
@@ -569,7 +656,7 @@ static float WHT[8] = {0, 2.72f, 2.72f, 2.72f, 1.25f, .9f, 0, 0}, FIT[8] = {1, 1
 static const int COST[8] = {40, 20, 20, 20, 12, 8, 25, 15};
 static const char* MN[8] = {"foundation", "wall", "doorway", "window_wall", "half_wall", "low_wall", "ceiling", "door"};
 static const float ID4[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-static GLuint mVbo[8], mIbo[8], mTex[6], streamVbo, dummyTex, rTex; static int mCnt[8]; static bool mReady = false; static GLint uMm = -1, uShMm = -1, uGt = -1, uRm = -1, uRmo = -1;
+static GLuint mVbo[8], mIbo[8], mTex[6], dummyTex, rTex; static int mCnt[8]; static bool mReady = false; static GLint uMm = -1, uShMm = -1, uGt = -1, uRm = -1, uRmo = -1;
 static float boff = 0, brot = 0; static int bhinge = 1;
 struct Gh { bool on, ok; int type; float x, y, z, yaw; int hinge; char why[48]; };
 static Gh gh = {};
@@ -617,11 +704,37 @@ static void pushOBB(float& x, float& z, float cx, float cz, float yaw, float hx,
   x = cx + lx*c + lz*s; z = cz - lx*s + lz*c;
 }
 static const float STEP = .6f;   // auto-step / mantle height
+// ===================== spatial partitioning: building pieces and world nodes live in hash grids =====================
+static bool shDirty = true;   // something that casts a shadow changed -> the cached shadow map must be redrawn
+struct PcX { float c, s; alignas(16) float M[16]; };   // per piece cache (SoA): cos/sin of the yaw and the model matrix
+static vector<PcX> pcx; static unordered_map<long long, vector<int> > pgr; static vector<int> pdoor;   // 8x8 unit grid, door list (only doors animate)
+static void pcAdd(const Pc& p) {
+  int i = (int)pcs.size(); pcs.push_back(p); PcX x; x.c = cosf(p.yaw); x.s = sinf(p.yaw); pcMat(x.M, p); pcx.push_back(x);
+  pgr[ckey((int)floorf(p.x/8.f), (int)floorf(p.z/8.f))].push_back(i); if (p.type == 7) pdoor.push_back(i);
+}
+static void pcClear() { pcs.clear(); pcx.clear(); pgr.clear(); pdoor.clear(); }
+static void pcNear(float x, float z, float r, vector<int>& out) {   // pieces whose centre lies within r of (x,z)
+  out.clear(); if (pcs.empty()) return;
+  int i0 = (int)floorf((x - r)/8.f), i1 = (int)floorf((x + r)/8.f), j0 = (int)floorf((z - r)/8.f), j1 = (int)floorf((z + r)/8.f);
+  for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) { auto it = pgr.find(ckey(i, j)); if (it != pgr.end()) out.insert(out.end(), it->second.begin(), it->second.end()); }
+}
+struct PcView {   // range-for over a list of piece indices (keeps the old loop bodies unchanged)
+  const vector<int>* ids;
+  struct It { const int* p; const Pc& operator*() const { return pcs[*p]; } It& operator++() { ++p; return *this; } bool operator!=(const It& o) const { return p != o.p; } };
+  It begin() const { return It{ids->data()}; } It end() const { return It{ids->data() + ids->size()}; }
+};
+static inline void w2lc(const Pc& p, float x, float z, float& lx, float& lz) {   // world -> local with the cached cos/sin
+  const PcX& k = pcx[(size_t)(&p - pcs.data())]; float dx = x - p.x, dz = z - p.z; lx = dx*k.c - dz*k.s; lz = dx*k.s + dz*k.c;
+}
+static void doorStep(float dt) {   // doors sleep once they reached their target
+  for (int i : pdoor) { Pc& d = pcs[i]; if (fabsf(d.tgt - d.open) > 1e-3f) { d.open += (d.tgt - d.open)*fminf(1.f, dt*8.f); pcMat(pcx[i].M, d); shDirty = true; } }
+}
+static vector<int> pnl;   // scratch lists (no allocation per frame)
 static void collidePcs() {
-  float hh = CELLW*.5f;
-  for (const auto& p : pcs) {
+  pcNear(px, pz, 4.f, pnl); PcView nv = {&pnl}; float hh = CELLW*.5f;
+  for (const auto& p : nv) {
     float top = topOf(p);
-    if (p.type == 0) { float lx, lz; w2l(p, px, pz, lx, lz); if (py < top - STEP && fabsf(lx) < hh + .6f && fabsf(lz) < hh + .6f) pushOBB(px, pz, p.x, p.z, p.yaw, hh, hh); }
+    if (p.type == 0) { float lx, lz; w2lc(p, px, pz, lx, lz); if (py < top - STEP && fabsf(lx) < hh + .6f && fabsf(lz) < hh + .6f) pushOBB(px, pz, p.x, p.z, p.yaw, hh, hh); }
     else if (p.type >= 1 && p.type <= 5) {
       if (!(py < top - .1f && py + 1.8f > p.y + .1f)) continue;
       if (p.type == 2) { float ph = (HW[2] - DOORHW)*.5f, pc = DOORHW + ph; for (int sg = -1; sg <= 1; sg += 2) { float cx, cz; loc2w(p, sg*pc, 0, cx, cz); pushOBB(px, pz, cx, cz, p.yaw, ph, .15f); } }
@@ -630,17 +743,42 @@ static void collidePcs() {
   }
 }
 static float surfaceY(float x, float z, float feet, float base) {
-  float g = base, hh = CELLW*.5f;
-  for (const auto& p : pcs) if (p.type == 0 || p.type == 6) { float lx, lz; w2l(p, x, z, lx, lz); float top = topOf(p); if (fabsf(lx) < hh && fabsf(lz) < hh && feet >= top - STEP) g = fmaxf(g, top); }
+  static vector<int> sl; pcNear(x, z, 4.f, sl); PcView nv = {&sl}; float g = base, hh = CELLW*.5f;
+  for (const auto& p : nv) if (p.type == 0 || p.type == 6) { float lx, lz; w2lc(p, x, z, lx, lz); float top = topOf(p); if (fabsf(lx) < hh && fabsf(lz) < hh && feet >= top - STEP) g = fmaxf(g, top); }
   return g;
 }
-static bool aimPoint(float& ax, float& ay, float& az) {   // view ray against terrain, floor slabs and walls
+// ---- world nodes (trees, rocks, ore, bushes): 64x64 unit chunks in a hash grid, structure of arrays inside a chunk ----
+static const int NCS = 64;
+struct Cell { unsigned vbo[2]; int n[2]; float y0, y1; signed char band; bool dirty, built; };   // one 32x32 static batch: [0] opaque, [1] alpha-tested
+struct NChunk { int cx, cz, n, dead; bool mod; vector<float> x, z, y, t; vector<int> type, hp; vector<signed char> cell; Cell c[4]; };
+static unordered_map<long long, NChunk*> nchm;
+struct DeadRef { NChunk* c; int i; }; static vector<DeadRef> deadList;   // harvested nodes waiting to respawn (event driven, nothing else is touched)
+static int nodeHp(int ty) { return ty == 0 || ty == 7 ? 5 : ty == 1 || ty == 5 || ty == 6 ? 7 : ty == 3 ? 4 : ty == 4 ? 5 : ty == 9 ? 3 : 1; }
+static NChunk* ncFind(int cx, int cz) { auto it = nchm.find(ckey(cx, cz)); return it == nchm.end() ? 0 : it->second; }
+static void nodeStep(float dt) {   // collision with the nodes around the player (3x3 chunks) + respawn timers
+  int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS);
+  for (int j = cz - 1; j <= cz + 1; j++) for (int i = cx - 1; i <= cx + 1; i++) {
+    NChunk* c = ncFind(i, j); if (!c) continue;
+    for (int k = 0; k < c->n; k++) {
+      float nx = c->x[k], nz = c->z[k]; if (c->hp[k] <= 0 || fabsf(nx - px) > 2.2f || fabsf(nz - pz) > 2.2f) continue;   // cheap reject first: nothing farther than 2.2 can touch the player
+      int ty = c->type[k];
+      if (ty != 2 && ty != 8 && ty != 10) { float r = ty == 0 || ty == 4 || ty == 7 ? .9f : ty == 1 || ty == 5 || ty == 6 ? 1.3f : ty == 9 ? .6f : .5f; push(px, pz, nx - r, nz - r, nx + r, nz + r); }
+      else { float bx = px - nx, bz = pz - nz; if (bx*bx + bz*bz < 3.5f) inBush = true; }
+    }
+  }
+  for (size_t q = 0; q < deadList.size();) {
+    NChunk* c = deadList[q].c; int i = deadList[q].i;
+    if ((c->t[i] -= dt) <= 0) { c->hp[i] = nodeHp(c->type[i]); c->c[c->cell[i]].dirty = true; c->dead--; deadList[q] = deadList.back(); deadList.pop_back(); shDirty = true; } else q++;
+  }
+}
+static bool aimPoint(float& ax, float& ay, float& az) {   // view ray against terrain, floor slabs and walls (only the pieces near the ray are tested)
   float cp = cosf(pitch), dx = -sinf(yaw)*cp, dy = sinf(pitch), dz = -cosf(yaw)*cp, ex = px, ey = py + 1.7f, ez = pz, hh = CELLW*.5f + .1f;
+  static vector<int> al; pcNear(ex, ez, 13.f, al); PcView nv = {&al};
   for (float t = .6f; t <= 10.f; t += .2f) {
     float x = ex + dx*t, y = ey + dy*t, z = ez + dz*t; ax = x; ay = y; az = z;
     if (y <= meshH(x, z)) return true;
-    for (const auto& p : pcs) {
-      float lx, lz; w2l(p, x, z, lx, lz);
+    for (const auto& p : nv) {
+      float lx, lz; w2lc(p, x, z, lx, lz);
       if (p.type == 0 || p.type == 6) { float top = topOf(p); if (fabsf(lx) < hh && fabsf(lz) < hh && y <= top && y >= top - 1.2f) { ay = top; return true; } }
       else if (p.type >= 1 && p.type <= 5 && fabsf(lx) < HW[p.type] + .1f && fabsf(lz) < .35f && y >= p.y && y <= p.y + WHT[p.type] + .2f) return true;
     }
@@ -667,14 +805,15 @@ static void updGhost() {
   if (sel < 0) return;
   if (sel == 0) { boff = fminf(fmaxf(boff + ev9*.25f, -3.f), 6.f); brot += ev10*.2618f; } else if (sel == 7 && ev10 > .5f) bhinge = -bhinge;
   gh.on = true; gh.ok = false; gh.type = sel; gh.hinge = bhinge; gh.why[0] = 0; gh.yaw = brot;
+  static vector<int> nlist; pcNear(px, pz, 22.f, nlist); PcView nearPcs = {&nlist};   // only the pieces around the player take part
   float cp = cosf(pitch); Ray rr = {{px, py + 1.7f, pz}, {-sinf(yaw)*cp, sinf(pitch), -cosf(yaw)*cp}};
   float ax, ay, az; bool hit = aimPoint(ax, ay, az); gh.x = ax; gh.y = ay; gh.z = az;
   float hh = CELLW*.5f; bool okp = false;
   if (sel == 0) {
     const Pc* nb = 0; float bd = 1.9f, bx = 0, bz = 0;
-    for (const auto& p : pcs) if (p.type == 0 && hypotf(p.x - px, p.z - pz) < 16.f) for (int k = 0; k < 4; k++) {
+    for (const auto& p : nearPcs) if (p.type == 0 && hypotf(p.x - px, p.z - pz) < 16.f) for (int k = 0; k < 4; k++) {
       float lx = k == 0 ? CELLW : k == 1 ? -CELLW : 0.f, lz = k == 2 ? CELLW : k == 3 ? -CELLW : 0.f, wx, wz; loc2w(p, lx, lz, wx, wz);
-      bool occ = false; for (const auto& q : pcs) if (q.type == 0 && fabsf(q.x - wx) < CELLW*.25f && fabsf(q.z - wz) < CELLW*.25f) occ = true; if (occ) continue;
+      bool occ = false; for (const auto& q : nearPcs) if (q.type == 0 && fabsf(q.x - wx) < CELLW*.25f && fabsf(q.z - wz) < CELLW*.25f) occ = true; if (occ) continue;
       float d = rayArea(rr, wx, wz, p.yaw, p.y + FT); if (d < bd) { bd = d; nb = &p; bx = wx; bz = wz; }
     }
     bool snap = nb != 0;
@@ -683,11 +822,11 @@ static void updGhost() {
     for (int i = -2; i <= 2; i++) for (int j = -2; j <= 2; j++) { float wx, wz; loc2w(t, i*CELLW*.25f, j*CELLW*.25f, wx, wz); float h = meshH(wx, wz); mx = fmaxf(mx, h); mn = fminf(mn, h); }
     float top = snap ? nb->y + FT : mx + .25f + boff, lo = mx + .15f, hi = mn + FT;
     gh.x = x; gh.z = z; gh.yaw = yw; gh.y = top - FT;
-    bool ov = false; for (const auto& q : pcs) if (q.type == 0 && hypotf(q.x - x, q.z - z) < CELLW*.9f) ov = true;
+    bool ov = false; for (const auto& q : nearPcs) if (q.type == 0 && hypotf(q.x - x, q.z - z) < CELLW*.9f) ov = true;
     if (ov) WHY("Здесь занято"); else if (mn < -.1f) WHY("В воде"); else if (top < lo - .001f) WHY("Фундамент в земле"); else if (top > hi + .001f) WHY("Слишком высоко: ножки не достают"); else okp = true;
   } else if (sel >= 1 && sel <= 5) {
     float bd = 1.8f; bool found = false;
-    for (const auto& s : pcs) if ((s.type == 0 || s.type == 6) && hypotf(s.x - px, s.z - pz) < 16.f) {
+    for (const auto& s : nearPcs) if ((s.type == 0 || s.type == 6) && hypotf(s.x - px, s.z - pz) < 16.f) {
       float top = s.type == 0 ? s.y + FT : s.y + CT, H = WHT[sel];
       for (int k = 0; k < 4; k++) {
         float lx = k == 0 ? hh : k == 1 ? -hh : 0.f, lz = k == 2 ? hh : k == 3 ? -hh : 0.f, wx, wz; loc2w(s, lx, lz, wx, wz);
@@ -697,10 +836,10 @@ static void updGhost() {
       }
     }
     if (!found) WHY("Наведите на край фундамента");
-    else { bool occ = false; for (const auto& q : pcs) if (q.type >= 1 && q.type <= 5 && fabsf(q.x - gh.x) < .4f && fabsf(q.z - gh.z) < .4f && fabsf(q.y - gh.y) < .5f) occ = true; if (occ) WHY("Здесь уже стена"); else okp = true; }
+    else { bool occ = false; for (const auto& q : nearPcs) if (q.type >= 1 && q.type <= 5 && fabsf(q.x - gh.x) < .4f && fabsf(q.z - gh.z) < .4f && fabsf(q.y - gh.y) < .5f) occ = true; if (occ) WHY("Здесь уже стена"); else okp = true; }
   } else if (sel == 6) {
     float bd = 2.1f; bool found = false;
-    for (const auto& w : pcs) {
+    for (const auto& w : nearPcs) {
       if (hypotf(w.x - px, w.z - pz) > 16.f) continue;
       if (w.type >= 1 && w.type <= 3) {
         float s_ = sinf(w.yaw), c_ = cosf(w.yaw), y0 = w.y + WHT[w.type]; int ps = ((px - w.x)*s_ + (pz - w.z)*c_ > 0) ? 1 : -1;
@@ -710,11 +849,11 @@ static void updGhost() {
       }
     }
     if (!found) WHY("Наведите на верх стены или потолка");
-    else { bool occ = false; for (const auto& q : pcs) if (q.type == 6 && fabsf(q.x - gh.x) < CELLW*.3f && fabsf(q.z - gh.z) < CELLW*.3f && fabsf(q.y - gh.y) < .5f) occ = true; if (occ) WHY("Здесь уже потолок"); else okp = true; }
+    else { bool occ = false; for (const auto& q : nearPcs) if (q.type == 6 && fabsf(q.x - gh.x) < CELLW*.3f && fabsf(q.z - gh.z) < CELLW*.3f && fabsf(q.y - gh.y) < .5f) occ = true; if (occ) WHY("Здесь уже потолок"); else okp = true; }
   } else {
     float bd = 1.8f; bool found = false;
-    for (const auto& d : pcs) if (d.type == 2 && hypotf(d.x - px, d.z - pz) < 16.f) {
-      bool has = false; for (const auto& q : pcs) if (q.type == 7 && fabsf(q.x - d.x) < .3f && fabsf(q.z - d.z) < .3f && fabsf(q.y - d.y) < .5f) has = true; if (has) continue;
+    for (const auto& d : nearPcs) if (d.type == 2 && hypotf(d.x - px, d.z - pz) < 16.f) {
+      bool has = false; for (const auto& q : nearPcs) if (q.type == 7 && fabsf(q.x - d.x) < .3f && fabsf(q.z - d.z) < .3f && fabsf(q.y - d.y) < .5f) has = true; if (has) continue;
       float dd = fminf(rayD(rr, d.x, d.y + DOORH*.5f, d.z), rayD(rr, d.x, d.y + DOORH*.9f, d.z)); if (dd < bd) { bd = dd; found = true; gh.x = d.x; gh.y = d.y; gh.z = d.z; gh.yaw = d.yaw; }
     }
     if (!found) WHY("Наведите на дверной проём"); else okp = true;
@@ -726,24 +865,28 @@ static void updGhost() {
 static void place() {
   if (!gh.on) { say("Выберите постройку в меню"); return; }
   if (!gh.ok) { if (gh.why[0]) say(gh.why); return; }
-  pcs.push_back({gh.type, gh.x, gh.y, gh.z, gh.yaw, gh.hinge, 0.f, 0.f}); wood -= COST[gh.type]; sfx(1);
+  pcAdd({gh.type, gh.x, gh.y, gh.z, gh.yaw, gh.hinge, 0.f, 0.f}); wood -= COST[gh.type]; sfx(1); shDirty = true;
 }
 static void act() {
   cd = .4f; float fx = -sinf(yaw), fz = -cosf(yaw);
   if (mode) { place(); return; }
-  for (auto& d : pcs) if (d.type == 7) { float dx = d.x - px, dz = d.z - pz, dd = hypotf(dx, dz); if (dd < 3.2f && dx*fx + dz*fz > .4f*dd) { d.tgt = d.tgt > .5f ? 0.f : 1.f; return; } }
-  Node* best = 0; float bd = 4.5f;
-  for (auto& n : nodes) {
-    if (n.hp <= 0 || n.type == 2 || n.type == 8 || n.type == 10) continue;
-    float dx = n.x-px, dz = n.z-pz, d = sqrtf(dx*dx + dz*dz);
-    if (d < bd && dx*fx + dz*fz > .6f*d) { bd = d; best = &n; }
+  for (int i : pdoor) { Pc& d = pcs[i]; float dx = d.x - px, dz = d.z - pz, dd = hypotf(dx, dz); if (dd < 3.2f && dx*fx + dz*fz > .4f*dd) { d.tgt = d.tgt > .5f ? 0.f : 1.f; return; } }
+  NChunk* bc = 0; int bi = -1; float bd = 4.5f, cxn = floorf(px/NCS), czn = floorf(pz/NCS);
+  for (int j = (int)czn - 1; j <= (int)czn + 1; j++) for (int i = (int)cxn - 1; i <= (int)cxn + 1; i++) {
+    NChunk* c = ncFind(i, j); if (!c) continue;
+    for (int k = 0; k < c->n; k++) {
+      int ty = c->type[k]; if (c->hp[k] <= 0 || ty == 2 || ty == 8 || ty == 10) continue;
+      float dx = c->x[k] - px, dz = c->z[k] - pz, d = sqrtf(dx*dx + dz*dz);
+      if (d < bd && dx*fx + dz*fz > .6f*d) { bd = d; bc = c; bi = k; }
+    }
   }
-  if (!best) { if (hgt(px + fx*3, pz + fz*3) < -.2f) { thirst = fminf(100.f, thirst + 18); say("Пьёшь воду"); } else say("Мимо"); return; }
-  if (--best->hp <= 0) best->t = 60;
-  if (best->type == 0 || best->type == 3 || best->type == 4 || best->type == 7) { wood += 10; say("+10 дерева"); }
-  else if (best->type == 1) { stone += 8; say("+8 камня"); }
-  else if (best->type == 5) { metal += 6; say("+6 металла"); }
-  else if (best->type == 6) { sulfur += 6; say("+6 серы"); }
+  if (!bc) { if (hgt(px + fx*3, pz + fz*3) < -.2f) { thirst = fminf(100.f, thirst + 18); say("Пьёшь воду"); } else say("Мимо"); return; }
+  int ty = bc->type[bi]; bc->mod = true;
+  if (--bc->hp[bi] <= 0) { bc->t[bi] = 60; bc->dead++; deadList.push_back(DeadRef{bc, bi}); bc->c[bc->cell[bi]].dirty = true; shDirty = true; }
+  if (ty == 0 || ty == 3 || ty == 4 || ty == 7) { wood += 10; say("+10 дерева"); }
+  else if (ty == 1) { stone += 8; say("+8 камня"); }
+  else if (ty == 5) { metal += 6; say("+6 металла"); }
+  else if (ty == 6) { sulfur += 6; say("+6 серы"); }
   else { thirst = fminf(100.f, thirst + 22); say("+22 воды"); }
 }
 static EM_BOOL tc(int type, const EmscriptenTouchEvent* e, void*) {
@@ -759,7 +902,8 @@ static EM_BOOL tc(int type, const EmscriptenTouchEvent* e, void*) {
   return EM_TRUE;
 }
 static void update(float dt) {
-  static bool mld = false; if (!mld && gk(11)) { loadModels(); mld = true; } for (auto& d : pcs) if (d.type == 7) d.open += (d.tgt - d.open)*fminf(1.f, dt*8.f);
+  PROF_SCOPE(1);
+  static bool mld = false; if (!mld && gk(11)) { loadModels(); mld = true; } doorStep(dt);
   inBush = false; tod += dt/240; if (tod > 1) tod -= 1; cd -= dt; msgT -= dt;
   food -= dt*.4f; thirst = fmaxf(0.f, thirst - dt*.55f);
   if (food <= 0 || thirst <= 0) { food = fmaxf(food, 0.f); hp -= dt*2; } else if (food > 50 && thirst > 50 && hp < 100) hp = fminf(100, hp + dt*2);
@@ -768,33 +912,19 @@ static void update(float dt) {
   yaw -= gf(5)*.006f; pitch = fminf(fmaxf(pitch - gf(6)*.006f, -1.4f), 1.4f);
   float fx = -sinf(yaw), fz = -cosf(yaw), rx = cosf(yaw), rz = -sinf(yaw), sp = 5.f*(hypotf(sx, sy) > .95f ? 1.4f : 1.f);
   float ox = px, oz = pz; px += (fx*-sy + rx*sx)*sp*dt; pz += (fz*-sy + rz*sx)*sp*dt;
-  for (auto& n : nodes) {
-    if (n.hp > 0) { float r = n.type == 0 || n.type == 4 || n.type == 7 ? .9f : n.type == 1 || n.type == 5 || n.type == 6 ? 1.3f : n.type == 9 ? .6f : .5f; if (n.type != 2 && n.type != 8 && n.type != 10) push(px, pz, n.x-r, n.z-r, n.x+r, n.z+r); else { float bx = px - n.x, bz = pz - n.z; if (bx*bx + bz*bz < 3.5f) inBush = true; } }
-    else if ((n.t -= dt) <= 0) n.hp = n.type == 0 || n.type == 7 ? 5 : n.type == 1 || n.type == 5 || n.type == 6 ? 7 : n.type == 3 ? 4 : n.type == 4 ? 5 : n.type == 9 ? 3 : 1;
-  }
+  nodeStep(dt);
   for (auto& b : blks) if (b.wall) push(px, pz, b.x-b.w/2, b.z-b.d/2, b.x+b.w/2, b.z+b.d/2);
   collidePcs();
   if (hgt(px, pz) < -.5f) { px = ox; pz = oz; }
   float gy = surfaceY(px, pz, py, meshH(px, pz));
   bool jmp = false; if (gk(1) && py <= gy + .01f) { vy = 7.8f; jmp = true; }
   vy -= 20*dt; py += vy*dt; if (py < gy + .25f && vy <= 0) { py = gy; vy = 0; }
-  { float mag = hypotf(sx, sy), b2 = biomeAt(px, pz); bool grd = py <= gy + .05f; aud(b2 > 1.5f ? 2 : (b2 > .5f || gy < 1.6f) ? 1 : 0, (mag > .12f && grd) ? (mag > .95f ? 2 : 1) : 0, inBush ? 1 : 0, tod, jmp ? 1 : 0); }
+  { float mag = hypotf(sx, sy), b2 = biomeAt(px, pz); bool grd = py <= gy + .05f;   // audio is event driven: the JS side is only called when something changed
+    int a0 = b2 > 1.5f ? 2 : (b2 > .5f || gy < 1.6f) ? 1 : 0, a1 = (mag > .12f && grd) ? (mag > .95f ? 2 : 1) : 0, a2 = inBush ? 1 : 0, a4 = jmp ? 1 : 0;
+    static int l0 = -1, l1 = -1, l2 = -1, l4 = -1; static float lt = -9.f;
+    if (a0 != l0 || a1 != l1 || a2 != l2 || a4 != l4 || fabsf(tod - lt) > .002f) { l0 = a0; l1 = a1; l2 = a2; l4 = a4; lt = tod; aud(a0, a1, a2, tod, a4); } }
   mode = gk(2); updGhost();
   if (gk(0) && cd <= 0) act();
-}
-static float TH[43][43], TX0, TZ0;
-static void terrain() {
-  const int N = 21; const float C = 5.f; int gx0 = (int)floorf(px/C), gz0 = (int)floorf(pz/C);
-  static float Y[2*N+1][2*N+1], Q[2*N+1][2*N+1][3];
-  for (int i = 0; i <= 2*N; i++) for (int j = 0; j <= 2*N; j++) {
-    float x = (gx0-N+i)*C, z = (gz0-N+j)*C, h = hgt(x, z);
-    float dx = hgt(x-2,z) - hgt(x+2,z), dz = hgt(x,z-2) - hgt(x,z+2), l = sqrtf(dx*dx + 16 + dz*dz), ny = 4/l;
-    float lit = .5f + .5f*fmaxf(0.f, (dx*.4f + 3.f - dz*.5f)/l);
-    Y[i][j] = TH[i][j] = h; Q[i][j][0] = lit; Q[i][j][1] = ny; Q[i][j][2] = biomeAt(x, z);
-  }
-  TX0 = (gx0-N)*C; TZ0 = (gz0-N)*C;
-  auto P = [&](int i, int j) { vb.push_back({(gx0-N+i)*C, Y[i][j], (gz0-N+j)*C, Q[i][j][0], Q[i][j][1], Q[i][j][2]}); };
-  for (int i = 0; i < 2*N; i++) for (int j = 0; j < 2*N; j++) { P(i,j); P(i+1,j); P(i+1,j+1); P(i,j); P(i+1,j+1); P(i,j+1); }
 }
 static void seg(float x0, float y0, float z0, float x1, float y1, float z1, float r0, float r1, float cr, float cg, float cb) {
   for (int i = 0; i < 6; i++) {
@@ -820,27 +950,6 @@ static void palm(float x, float y, float z) {
       vb.push_back({X0 - sx*w0, Y0, Z0 - sz*w0, .12f, .36f, .1f}); vb.push_back({X0 + sx*w0, Y0, Z0 + sz*w0, .12f, .36f, .1f}); vb.push_back({X1 + sx*w1, Y1, Z1 + sz*w1, .3f, .6f, .16f});
       vb.push_back({X0 - sx*w0, Y0, Z0 - sz*w0, .12f, .36f, .1f}); vb.push_back({X1 + sx*w1, Y1, Z1 + sz*w1, .3f, .6f, .16f}); vb.push_back({X1 - sx*w1, Y1, Z1 - sz*w1, .3f, .6f, .16f});
     }
-  }
-}
-static void grass(float tt) {   // short dense tufts
-  int cx = (int)floorf(px), cz = (int)floorf(pz);
-  for (int i = -20; i <= 20; i++) for (int j = -20; j <= 20; j++) {
-    int gx = cx + i, gz = cz + j; if (vn(gx*3+1, gz*5+2) < .2f) continue;
-    float x = gx + vn(gx, gz), z = gz + vn(gz+7, gx), dx = x-px, dz = z-pz, d2 = dx*dx + dz*dz;
-    if (d2 > 400) continue;
-    float sl, h = meshH(x, z, &sl); if (h < 1.5f || sl > .5f || biomeAt(x, z) > .3f || roadCov(x, z)) continue;
-    float kind = vn(gx+5, gz+1), s = .22f + .3f*vn(gx+3, gz+9), w = sinf(tt*2 + x*.7f + z*.5f)*.08f*s;
-    float cr = .12f, cg = .3f, cb = .07f, tr = .45f, tg = .66f, tb = .2f;
-    if (kind < .4f) { cr = .22f; cg = .32f; cb = .09f; tr = .72f; tg = .72f; tb = .27f; }
-    else if (kind > .88f) { cr = .25f; cg = .24f; cb = .1f; tr = .62f; tg = .55f; tb = .25f; }
-    int nb = d2 < 100 ? 4 : 2;
-    for (int q = 0; q < nb; q++) {
-      float a = q*6.2832f/nb + vn(gx, gz+q)*1.2f, bx = cosf(a)*.04f, bz = sinf(a)*.04f, hh = s*(.7f + .6f*vn(gx+q, gz));
-      tv(x-bx, h, z-bz, cr, cg, cb); tv(x+bx, h, z+bz, cr, cg, cb);
-      tv(x + w + cosf(a)*.12f*s, h + hh, z + w*.5f + sinf(a)*.12f*s, tr, tg, tb);
-    }
-    float fl = vn(gx+11, gz+3);
-    if (fl > .93f && d2 < 150) { float fr = fl > .97f ? .95f : .75f, fg = fl > .965f ? .85f : .6f, fb = fl > .955f ? .3f : .95f; float hy = h + s*1.1f; tv(x-.05f, hy, z, fr, fg, fb); tv(x+.05f, hy, z, fr, fg, fb); tv(x, hy + .1f, z, fr, fg, fb); }
   }
 }
 static void cone(float x, float y, float z, float rad, float h, float r, float g, float b) {
@@ -974,50 +1083,298 @@ static void cactus(float x, float y, float z, int seed, int lod) {   // saguaro 
     tube(P, Rr, 7, sides + 2 > 12 ? 12 : sides + 2, 4);
   } else for (int q = 0; q < 4; q++) { float a = q*1.57f + vn(seed, q), qx = x + cosf(a)*.5f*s, qz = z + sinf(a)*.5f*s; blob(qx, y + .3f*q*s, qz, (q & 1 ? .22f : .8f)*s, .62f*s, (q & 1 ? .8f : .22f)*s, seed + q, 4, .1f, 1); }
 }
-static void water() {
-  auto W3 = [&](int i, int j) { vb.push_back({TX0 + i*5.f, -.2f, TZ0 + j*5.f, -.2f - TH[i][j], 0, 0}); };
-  for (int i = 0; i < 42; i++) for (int j = 0; j < 42; j++) {
-    if (fminf(fminf(TH[i][j], TH[i+1][j]), fminf(TH[i][j+1], TH[i+1][j+1])) > .5f) continue;
-    W3(i,j); W3(i+1,j); W3(i+1,j+1); W3(i,j); W3(i+1,j+1); W3(i,j+1);
-  }
-}
 static void ore(float x, float y, float z, int t, int seed, int lod) {   // 0 stone, 1 metal, 2 sulfur: one fused boulder (+8 = snow-capped)
   if (biomeAt(x, z) > 1.5f) t += 8;
   blob(x, y, z, 1.9f, 1.5f, 1.7f, seed, t, .42f, lod == 0 ? 2 : 1);
 }
-static void lightMat(float* LM, float lx, float ly, float lz) {   // orthographic sun view around the player
+// ===================== render caches: static batches, frustum culling, streaming =====================
+struct Frus { float p[6][4]; };
+static Frus fr;
+static void frustumFrom(Frus& f, const float* A) {   // planes of a column-major view-projection matrix (works for the perspective and for the sun's orthographic one)
+  for (int k = 0; k < 6; k++) {
+    int r = k >> 1; float s = (k & 1) ? -1.f : 1.f, a[4]; for (int c = 0; c < 4; c++) a[c] = A[c*4 + 3] + s*A[c*4 + r];
+    float l = sqrtf(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]) + 1e-9f; for (int c = 0; c < 4; c++) f.p[k][c] = a[c]/l;
+  }
+}
+static inline bool inFrus(const Frus& f, float x0, float y0, float z0, float x1, float y1, float z1) {
+  for (int k = 0; k < 6; k++) { const float* p = f.p[k]; if (p[0]*(p[0] > 0 ? x1 : x0) + p[1]*(p[1] > 0 ? y1 : y0) + p[2]*(p[2] > 0 ? z1 : z0) + p[3] < 0) return false; }
+  return true;
+}
+static vector<GLuint> bufPool;   // pooled vertex buffers: nothing is created or destroyed while moving through the world
+static GLuint bufGet() { if (!bufPool.empty()) { GLuint b = bufPool.back(); bufPool.pop_back(); return b; } GLuint b; glGenBuffers(1, &b); return b; }
+static void bufPut(GLuint b) { if (b) bufPool.push_back(b); }
+static void bufUp(GLuint b, const V* d, int n) { glBindBuffer(GL_ARRAY_BUFFER, b); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)n*sizeof(V), d, GL_STATIC_DRAW); }
+static inline void attribs() { glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, (void*)0); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12); }
+static inline void bufDraw(GLuint b, int n) { glBindBuffer(GL_ARRAY_BUFFER, b); attribs(); glDrawArrays(GL_TRIANGLES, 0, n); }
+
+// ---- terrain blocks (static indexed meshes) ----
+static GLuint tIbo = 0;
+static void tcIndices() { vector<unsigned short> I; for (int j = 0; j < TCN; j++) for (int i = 0; i < TCN; i++) { unsigned short a = j*TCV + i, b = a + 1, c = a + TCV + 1, d = a + TCV; unsigned short t[6] = {a, b, c, a, c, d}; I.insert(I.end(), t, t + 6); }
+  glGenBuffers(1, &tIbo); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tIbo); glBufferData(GL_ELEMENT_ARRAY_BUFFER, I.size()*2, I.data(), GL_STATIC_DRAW); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); }
+static void tcDraw(TChunk* c) {
+  if (!c->up) { if (!c->vbo) c->vbo = bufGet(); bufUp(c->vbo, c->v, TCV*TCV); c->up = true; }
+  glBindBuffer(GL_ARRAY_BUFFER, c->vbo); attribs(); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tIbo); glDrawElements(GL_TRIANGLES, TCN*TCN*6, GL_UNSIGNED_SHORT, (void*)0); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+static void tcWater(TChunk* c) { if (!c->wn) return; if (!c->wup) { if (!c->wvbo) c->wvbo = bufGet(); bufUp(c->wvbo, c->wv.data(), c->wn); c->wup = true; } bufDraw(c->wvbo, c->wn); }
+static vector<TChunk*> tvis;
+static void collectTerrain() {   // blocks that cover the old 105 unit window and touch the view frustum
+  const float R = 110.f; tvis.clear();
+  int i0 = (int)floorf((px - R)/80.f), i1 = (int)floorf((px + R)/80.f), j0 = (int)floorf((pz - R)/80.f), j1 = (int)floorf((pz + R)/80.f);
+  for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) { TChunk* c = tcGet(i, j); if (inFrus(fr, i*80.f, c->y0 - .5f, j*80.f, i*80.f + 80.f, c->y1 + .5f, j*80.f + 80.f)) tvis.push_back(c); }
+}
+// ---- world nodes: generation (deterministic per chunk) ----
+static void ncGen(int cx, int cz) {
+  NChunk* c = new NChunk(); c->cx = cx; c->cz = cz; c->dead = 0; c->mod = false;
+  for (int k = 0; k < 4; k++) { Cell& e = c->c[k]; e.vbo[0] = e.vbo[1] = 0; e.n[0] = e.n[1] = 0; e.y0 = 0; e.y1 = 1; e.band = -1; e.dirty = true; e.built = false; }
+  c->x.reserve(48); c->z.reserve(48); c->y.reserve(48); c->t.reserve(48); c->type.reserve(48); c->hp.reserve(48); c->cell.reserve(48);
+  for (int i = 0; i < 60; i++) {
+    float x = (cx + vn(cx*17 + i, cz*31 + 5))*64.f, z = (cz + vn(cx*23 + 7, cz*19 + i))*64.f, sl, h = meshH(x, z, &sl), r = vn(cx*13 + i*3, cz*7 + i), bio = biomeAt(x, z);
+    if (hypotf(x - spX, z - spZ) < 6.f || h < .8f || sl > .5f || blockedAt(x, z)) continue;   // no water, no cliff faces, nothing on roads / platforms
+    int bi = bio < .5f ? 0 : bio < 1.5f ? 1 : 2, ty;
+    if (bi == 0) ty = h < 1.8f ? (r < .6f ? 2 : -1) : r < .25f ? 0 : r < .6f ? 4 : r < .69f ? 1 : r < .75f ? 5 : r < .8f ? 6 : 2;
+    else if (bi == 1) ty = r < .38f ? 9 : r < .5f ? 3 : r < .68f ? 10 : r < .78f ? 1 : r < .86f ? 5 : r < .92f ? 6 : -1;
+    else ty = r < .5f ? 7 : r < .68f ? 8 : r < .78f ? 1 : r < .85f ? 5 : r < .9f ? 6 : -1;
+    if (ty < 0) continue;
+    float rad = ty == 1 || ty == 5 || ty == 6 ? 1.7f : ty == 2 || ty == 8 || ty == 10 ? 1.5f : .7f;
+    float yy = fminf(h, fminf(fminf(meshH(x + rad, z), meshH(x - rad, z)), fminf(meshH(x, z + rad), meshH(x, z - rad))));   // sink into slopes, never float
+    c->x.push_back(x); c->z.push_back(z); c->y.push_back(yy); c->t.push_back(0.f); c->type.push_back(ty); c->hp.push_back(nodeHp(ty));
+    c->cell.push_back((signed char)((x - cx*64.f >= 32.f ? 1 : 0) + (z - cz*64.f >= 32.f ? 2 : 0)));
+  }
+  c->n = (int)c->x.size(); nchm[ckey(cx, cz)] = c;
+}
+// ---- 32x32 static batches of nodes (and beach pebbles): baked once per detail level, redrawn only when something changes ----
+static vector<V> vtmp[2];
+static int bandFor(float d2, int cur) {   // 0 full detail | 1 medium | 2 low | 3 low without bushes; hysteresis keeps cells from flip-flopping
+  static const float T[3] = {1500.f, 5000.f, 8100.f}; int b = 0; while (b < 3 && d2 >= T[b]) b++;
+  if (cur >= 0 && b != cur) { float lo = cur > 0 ? T[cur - 1] : -1e9f, hi = cur < 3 ? T[cur] : 1e30f; if (d2 > lo*.88f && d2 < hi*1.12f) return cur; }
+  return b;
+}
+static float cellD2(int cx, int cz, int k) {
+  float x0 = cx*64.f + (k & 1)*32.f, z0 = cz*64.f + (k >> 1)*32.f, dx = fmaxf(fmaxf(x0 - px, 0.f), px - (x0 + 32.f)), dz = fmaxf(fmaxf(z0 - pz, 0.f), pz - (z0 + 32.f)); return dx*dx + dz*dz;
+}
+static void cellFree(Cell& e) { bufPut(e.vbo[0]); bufPut(e.vbo[1]); e.vbo[0] = e.vbo[1] = 0; e.n[0] = e.n[1] = 0; e.built = false; e.band = -1; e.dirty = true; }
+static void cellBuild(NChunk* c, int k, int band) {
+  Cell& e = c->c[k]; vb.clear(); int lod = band > 2 ? 2 : band;
+  for (int i = 0; i < c->n; i++) {
+    if (c->cell[i] != k || c->hp[i] <= 0) continue;
+    int ty = c->type[i]; if ((ty == 2 || ty == 8 || ty == 10) && band > 2) continue;
+    float nx = c->x[i], ny = c->y[i], nz = c->z[i]; int sd0 = (int)(nx*7) ^ (int)(nz*13);
+    if (ty == 0) pine(nx, ny, nz, .9f + .6f*vn(sd0, 1), lod, 1);
+    else if (ty == 7) pine(nx, ny, nz, .9f + .6f*vn(sd0, 1), lod, 3);
+    else if (ty == 1 || ty == 5 || ty == 6) ore(nx, ny, nz, ty == 1 ? 0 : ty - 4, sd0, lod);
+    else if (ty == 2) bush(nx, ny, nz, sd0, lod, 2);
+    else if (ty == 8) bush(nx, ny, nz, sd0, lod, 4);
+    else if (ty == 10) bush(nx, ny, nz, sd0, lod, 5);
+    else if (ty == 4) oak(nx, ny, nz, .9f + .5f*vn(sd0, 2), sd0, lod);
+    else if (ty == 9) cactus(nx, ny, nz, sd0, lod);
+    else palm(nx, ny, nz);
+  }
+  if (band == 0) {   // stones on the beach
+    int tx0 = (int)floorf((c->cx*64.f + (k & 1)*32.f)/2), tz0 = (int)floorf((c->cz*64.f + (k >> 1)*32.f)/2);
+    for (int i = 0; i < 16; i++) for (int j = 0; j < 16; j++) {
+      int gx = tx0 + i, gz = tz0 + j; if (vn(gx*5+3, gz*7+1) < .86f) continue;
+      float x = (gx + vn(gx, gz+2))*2, z = (gz + vn(gz+5, gx))*2, h = meshH(x, z);
+      if (h < -.3f || h > 1.4f) continue;
+      float s = .12f + .3f*vn(gx+9, gz); blob(x, h - .03f, z, s, s*.55f, s*.8f, gx^gz, 3, .3f, 0);
+    }
+  }
+  vtmp[0].clear(); vtmp[1].clear(); float y0 = 1e9f, y1 = -1e9f;
+  for (size_t i = 0; i + 2 < vb.size(); i += 3) { int cut = (vb[i].b > 1.5f && vb[i].b < 19.5f) ? 1 : 0; vtmp[cut].insert(vtmp[cut].end(), vb.begin() + i, vb.begin() + i + 3); }   // alpha-tested leaf cards are drawn last
+  for (size_t i = 0; i < vb.size(); i++) { y0 = fminf(y0, vb[i].y); y1 = fmaxf(y1, vb[i].y); }
+  for (int p = 0; p < 2; p++) { e.n[p] = (int)vtmp[p].size(); if (e.n[p]) { if (!e.vbo[p]) e.vbo[p] = bufGet(); bufUp(e.vbo[p], vtmp[p].data(), e.n[p]); } }
+  e.y0 = vb.empty() ? 0.f : y0; e.y1 = vb.empty() ? 1.f : y1; e.band = (signed char)band; e.dirty = false; e.built = true; vb.clear();
+  if (cellD2(c->cx, c->cz, k) < 4900.f) shDirty = true;   // changed geometry near the player: refresh the shadow map
+}
+// ---- occlusion culling (horizon test): a distant cell that is completely hidden behind a ridge of the terrain is not drawn ----
+static bool terrainHmin(float x, float z, float& h) {   // lowest corner height of the cached lattice cell under (x,z); false if that block is not loaded (nothing is ever built here)
+  int gx = (int)floorf(x/5.f), gz = (int)floorf(z/5.f); auto it = tcm.find(ckey(gx >> 4, gz >> 4)); if (it == tcm.end()) return false;
+  const float* H = it->second->h + (gz & 15)*TCV + (gx & 15); h = fminf(fminf(H[0], H[1]), fminf(H[TCV], H[TCV + 1])); return true;
+}
+static bool cellOccluded(float x0, float z0, float ytop) {   // conservative: all 9 view rays to the top of the cell must be blocked by terrain with a 1 unit margin
+  float ex = px, ey = py + 1.7f, ez = pz;
+  for (int k = 0; k < 9; k++) {
+    float tx = x0 + (k % 3)*16.f, tz = z0 + (k/3)*16.f, ty = ytop + .5f; bool blocked = false;
+    for (int s = 1; s <= 7 && !blocked; s++) { float t = s/8.f, x = ex + (tx - ex)*t, z = ez + (tz - ez)*t, h; if (terrainHmin(x, z, h) && h > ey + (ty - ey)*t + 1.f) blocked = true; }
+    if (!blocked) return false;
+  }
+  return true;
+}
+static void drawCells(const Frus& f, int pass, bool shadow) {   // pass 0 opaque, 1 alpha-tested
+  int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS);
+  for (int j = cz - 3; j <= cz + 3; j++) for (int i = cx - 3; i <= cx + 3; i++) {
+    NChunk* c = ncFind(i, j); if (!c) continue;
+    for (int k = 0; k < 4; k++) { Cell& e = c->c[k]; if (!e.built || !e.n[pass]) continue;
+      float x0 = i*64.f + (k & 1)*32.f, z0 = j*64.f + (k >> 1)*32.f; if (!shadow && cellD2(i, j, k) > 16900.f) continue;
+      if (!inFrus(f, x0, e.y0 - .2f, z0, x0 + 32.f, e.y1 + .2f, z0 + 32.f)) continue;
+      if (!shadow && cellD2(i, j, k) > 3600.f && cellOccluded(x0, z0, e.y1)) {
+#ifdef PROF
+        pC[3]++;
+#endif
+        continue; }
+      bufDraw(e.vbo[pass], e.n[pass]); }
+  }
+}
+// ---- platform props (static) ----
+struct PlatMesh { unsigned vbo; int n; }; static vector<PlatMesh> pmesh;
+static void platBuild(size_t i) {   // placeholder monument: a pole with a flag and four corner bollards
+  const Plat& p = plats[i]; float c = cosf(p.yaw), s = sinf(p.yaw); vb.clear();
+  box(p.x, p.h, p.z, .5f, 7.f, .5f, .36f, .37f, .4f); box(p.x + .8f, p.h + 5.6f, p.z, 1.6f, .95f, .08f, .86f, .22f, .16f);
+  for (int k = 0; k < 4; k++) { float lx = (k & 1 ? 1.f : -1.f)*(p.hx - 1.2f), lz = (k & 2 ? 1.f : -1.f)*(p.hz - 1.2f); box(p.x + lx*c + lz*s, p.h, p.z - lx*s + lz*c, .6f, 1.1f, .6f, .9f, .74f, .12f); }
+  pmesh[i].vbo = bufGet(); pmesh[i].n = (int)vb.size(); bufUp(pmesh[i].vbo, vb.data(), pmesh[i].n); vb.clear();
+}
+static void drawPlats(const Frus& f, bool shadow) {
+  for (size_t i = 0; i < plats.size(); i++) { const Plat& p = plats[i]; float dx = p.x - px, dz = p.z - pz; if (!shadow && dx*dx + dz*dz > 25600.f) continue;
+    if (!inFrus(f, p.x - 16.f, p.h - 1.f, p.z - 16.f, p.x + 16.f, p.h + 8.f, p.z + 16.f)) continue;
+    if (!pmesh[i].n) platBuild(i); bufDraw(pmesh[i].vbo, pmesh[i].n); }
+}
+// ---- grass: 16x16 tile static batches, the wind is animated in the vertex shader (tips carry +2 in the red channel) ----
+static const int GCN = 16;
+struct GChunk { int cx, cz; unsigned vbo; int n; signed char lod; float y0, y1; };
+static unordered_map<long long, GChunk*> gcm;
+static void grassBuild(GChunk* g, int lod) {   // lod 0: 4 blades per tuft + flowers, lod 1: 2 blades
+  vb.clear(); int nb = lod == 0 ? 4 : 2;
+  for (int gx = g->cx*GCN; gx < g->cx*GCN + GCN; gx++) for (int gz = g->cz*GCN; gz < g->cz*GCN + GCN; gz++) {
+    if (vn(gx*3+1, gz*5+2) < .2f) continue;
+    float x = gx + vn(gx, gz), z = gz + vn(gz+7, gx);
+    float sl, h = meshH(x, z, &sl); if (h < 1.5f || sl > .5f || biomeAt(x, z) > .3f || roadCov(x, z)) continue;
+    float kind = vn(gx+5, gz+1), s = .22f + .3f*vn(gx+3, gz+9);
+    float cr = .12f, cg = .3f, cb = .07f, tr = .45f, tg = .66f, tb = .2f;
+    if (kind < .4f) { cr = .22f; cg = .32f; cb = .09f; tr = .72f; tg = .72f; tb = .27f; }
+    else if (kind > .88f) { cr = .25f; cg = .24f; cb = .1f; tr = .62f; tg = .55f; tb = .25f; }
+    for (int q = 0; q < nb; q++) {
+      float a = q*6.2832f/nb + vn(gx, gz+q)*1.2f, bx = cosf(a)*.04f, bz = sinf(a)*.04f, hh = s*(.7f + .6f*vn(gx+q, gz));
+      tv(x-bx, h, z-bz, cr, cg, cb); tv(x+bx, h, z+bz, cr, cg, cb);
+      tv(x + cosf(a)*.12f*s, h + hh, z + sinf(a)*.12f*s, tr + 2.f, tg, tb);
+    }
+    float fl = vn(gx+11, gz+3);
+    if (lod == 0 && fl > .93f) { float fr_ = fl > .97f ? .95f : .75f, fg = fl > .965f ? .85f : .6f, fb = fl > .955f ? .3f : .95f; float hy = h + s*1.1f; tv(x-.05f, hy, z, fr_, fg, fb); tv(x+.05f, hy, z, fr_, fg, fb); tv(x, hy + .1f, z, fr_, fg, fb); }
+  }
+  float y0 = 1e9f, y1 = -1e9f; for (size_t i = 0; i < vb.size(); i++) { y0 = fminf(y0, vb[i].y); y1 = fmaxf(y1, vb[i].y); }
+  g->n = (int)vb.size(); if (g->n) { if (!g->vbo) g->vbo = bufGet(); bufUp(g->vbo, vb.data(), g->n); } g->y0 = g->n ? y0 : 0.f; g->y1 = g->n ? y1 : 1.f; g->lod = (signed char)lod; vb.clear();
+}
+static float gcD2(int cx, int cz) { float x0 = cx*(float)GCN, z0 = cz*(float)GCN, dx = fmaxf(fmaxf(x0 - px, 0.f), px - (x0 + GCN)), dz = fmaxf(fmaxf(z0 - pz, 0.f), pz - (z0 + GCN)); return dx*dx + dz*dz; }
+static void drawGrass(const Frus& f) {
+  for (auto& kv : gcm) { GChunk* g = kv.second; if (!g->n || gcD2(g->cx, g->cz) > 576.f) continue;
+    if (inFrus(f, g->cx*(float)GCN, g->y0 - .1f, g->cz*(float)GCN, g->cx*(float)GCN + GCN, g->y1 + .1f, g->cz*(float)GCN + GCN)) bufDraw(g->vbo, g->n); }
+}
+// ---- building pieces: instanced drawing (one draw call per piece type instead of one per piece) ----
+static bool instOk = false; static GLuint instVbo = 0; static GLint uInst = -1, uShInst = -1; static vector<float> imat[8];
+static void drawPcsInst(const Frus& f, bool shadow) {
+  if (!mReady || pcs.empty()) return;
+  for (int m = 0; m < 8; m++) imat[m].clear();
+  for (size_t i = 0; i < pcs.size(); i++) { const Pc& p = pcs[i]; if (!mCnt[p.type]) continue;
+    float dx = p.x - px, dz = p.z - pz; if (!shadow && dx*dx + dz*dz > 16900.f) continue;
+    if (!inFrus(f, p.x - 3.4f, p.y - 1.f, p.z - 3.4f, p.x + 3.4f, p.y + 6.f, p.z + 3.4f)) continue;
+    imat[p.type].insert(imat[p.type].end(), pcx[i].M, pcx[i].M + 16); }
+  GLint ui = shadow ? uShInst : uInst, um = shadow ? uShMm : uMm;
+  for (int m = 0; m < 8; m++) { int n = (int)imat[m].size()/16; if (!n) continue;
+    glBindBuffer(GL_ARRAY_BUFFER, mVbo[m]); attribs(); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mIbo[m]);
+    if (instOk) {
+      glBindBuffer(GL_ARRAY_BUFFER, instVbo); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)n*64, imat[m].data(), GL_STREAM_DRAW);
+      for (int k = 0; k < 4; k++) { glEnableVertexAttribArray(2 + k); glVertexAttribPointer(2 + k, 4, GL_FLOAT, 0, 64, (void*)(size_t)(k*16)); glVertexAttribDivisorANGLE(2 + k, 1); }
+      glUniform1f(ui, 1.f); glDrawElementsInstancedANGLE(GL_TRIANGLES, mCnt[m], GL_UNSIGNED_SHORT, 0, n); glUniform1f(ui, 0.f);
+      for (int k = 0; k < 4; k++) { glVertexAttribDivisorANGLE(2 + k, 0); glDisableVertexAttribArray(2 + k); }
+    } else for (int q = 0; q < n; q++) { glUniformMatrix4fv(um, 1, 0, &imat[m][q*16]); glDrawElements(GL_TRIANGLES, mCnt[m], GL_UNSIGNED_SHORT, 0); }
+  }
+  glUniformMatrix4fv(um, 1, 0, ID4); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+// ---- streaming: everything near the player is generated / baked with a small time budget per frame, everything far away is released ----
+static void resetWorldCaches() {
+  for (auto& kv : tcm) { TChunk* c = kv.second; bufPut(c->vbo); bufPut(c->wvbo); c->vbo = c->wvbo = 0; tcPool.push_back(c); } tcm.clear(); tcLast = 0;
+  for (auto& kv : nchm) { NChunk* c = kv.second; for (int k = 0; k < 4; k++) cellFree(c->c[k]); delete c; } nchm.clear(); deadList.clear();
+  for (auto& kv : gcm) { bufPut(kv.second->vbo); delete kv.second; } gcm.clear();
+  for (auto& m : pmesh) bufPut(m.vbo); pmesh.assign(plats.size(), PlatMesh{0, 0});
+  pcClear(); shDirty = true;
+}
+static void unloadFar() {
+  for (auto it = tcm.begin(); it != tcm.end();) { TChunk* c = it->second; float dx = (c->cx + .5f)*80.f - px, dz = (c->cz + .5f)*80.f - pz;
+    if (dx*dx + dz*dz > 360000.f) { bufPut(c->vbo); bufPut(c->wvbo); c->vbo = c->wvbo = 0; tcPool.push_back(c); if (tcLast == c) tcLast = 0; it = tcm.erase(it); } else ++it; }
+  for (auto it = nchm.begin(); it != nchm.end();) { NChunk* c = it->second; float dx = (c->cx + .5f)*64.f - px, dz = (c->cz + .5f)*64.f - pz;
+    if (!c->mod && !c->dead && dx*dx + dz*dz > 360000.f) { for (int k = 0; k < 4; k++) cellFree(c->c[k]); delete c; it = nchm.erase(it); }   // generation is deterministic: it comes back identical
+    else { if (dx*dx + dz*dz > 40000.f) for (int k = 0; k < 4; k++) if (c->c[k].built) cellFree(c->c[k]); ++it; } }
+  for (auto it = gcm.begin(); it != gcm.end();) { GChunk* g = it->second; if (gcD2(g->cx, g->cz) > 6400.f) { bufPut(g->vbo); delete g; it = gcm.erase(it); } else ++it; }
+}
+static void streamWorld(bool force) {
+  PROF_SCOPE(12);
+  double t0 = emscripten_get_now(); const double BUD = force ? 1e9 : 3.0; auto over = [&]() { return emscripten_get_now() - t0 > BUD; };
+  int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS);
+  static vector<pair<float, int> > ord;
+  if (ord.empty()) for (int j = -3; j <= 3; j++) for (int i = -3; i <= 3; i++) ord.push_back(make_pair((float)(i*i + j*j), (j + 3)*7 + i + 3));
+  if (!force || ord.size() == 49) sort(ord.begin(), ord.end());
+  for (size_t q = 0; q < ord.size(); q++) {   // 1. node chunks, nearest first
+    int i = cx + ord[q].second % 7 - 3, j = cz + ord[q].second / 7 - 3; if (ncFind(i, j)) continue; ncGen(i, j); if (over()) break; }
+  if (!over()) {   // 2. terrain blocks ahead of the player (physics and node placement need them anyway)
+    int bx = (int)floorf(px/80.f), bz = (int)floorf(pz/80.f);
+    for (int r = 0; r <= 3 && !over(); r++) for (int j = bz - r; j <= bz + r && !over(); j++) for (int i = bx - r; i <= bx + r; i++) { if (r && j != bz - r && j != bz + r && i != bx - r && i != bx + r) continue; if (!tcm.count(ckey(i, j))) { tcGet(i, j); if (over()) break; } }
+  }
+  if (!over()) {   // 3. 32x32 batches: missing, dirty (harvested / respawned) or at a new detail level
+    static vector<pair<float, int> > todo; todo.clear();
+    for (int j = cz - 3; j <= cz + 3; j++) for (int i = cx - 3; i <= cx + 3; i++) { NChunk* c = ncFind(i, j); if (!c) continue;
+      for (int k = 0; k < 4; k++) { float d2 = cellD2(i, j, k); if (d2 > 19600.f) continue; Cell& e = c->c[k]; int b = bandFor(d2, e.band);
+        if (!e.built || e.dirty || b != e.band) todo.push_back(make_pair(d2, (((j - cz + 3)*7 + (i - cx + 3)) << 2) | k)); } }
+    sort(todo.begin(), todo.end());
+    for (size_t q = 0; q < todo.size(); q++) { int id = todo[q].second, k = id & 3, o = id >> 2, i = cx + o % 7 - 3, j = cz + o/7 - 3; NChunk* c = ncFind(i, j);
+      cellBuild(c, k, bandFor(todo[q].first, c->c[k].band)); if (over() && !force) break; }
+  }
+  if (!over()) {   // 4. grass blocks around the player
+    int gx = (int)floorf(px/GCN), gz = (int)floorf(pz/GCN);
+    for (int j = gz - 2; j <= gz + 2; j++) for (int i = gx - 2; i <= gx + 2; i++) { float d2 = gcD2(i, j); if (d2 > 900.f) continue; int want = d2 < 144.f ? 0 : 1;
+      auto it = gcm.find(ckey(i, j)); GChunk* g; if (it == gcm.end()) { g = new GChunk(); g->cx = i; g->cz = j; g->vbo = 0; g->n = 0; g->lod = -1; gcm[ckey(i, j)] = g; } else g = it->second;
+      if (g->lod != want && (g->lod < 0 || (want == 0 ? d2 < 121.f : d2 > 169.f))) { grassBuild(g, want); if (over() && !force) break; } }
+  }
+  static int fc = 0; if (++fc % 120 == 0) unloadFar();
+}
+#ifdef PROF
+static int profNodes() { int n = 0; for (auto& kv : nchm) n += kv.second->n; return n; }
+static int profChunks() { return (int)nchm.size(); }
+#endif
+static void lightMat(float* LM, float lx, float ly, float lz) {   // orthographic sun view around the player, snapped to the shadow-map texel grid (no shimmering when the map is refreshed)
   ly = fmaxf(ly, .25f); float ll = sqrtf(lx*lx + ly*ly + lz*lz); lx /= ll; ly /= ll; lz /= ll;
   float ex = px + lx*100, ey = py + ly*100, ez = pz + lz*100, fx = -lx, fy = -ly, fz = -lz, ux = 0, uy = 1, uz = 0;
   if (ly > .95f) { uy = 0; uz = 1; }
   float rx = fy*uz - fz*uy, ry = fz*ux - fx*uz, rz = fx*uy - fy*ux, rl = sqrtf(rx*rx + ry*ry + rz*rz); rx /= rl; ry /= rl; rz /= rl;
   float vx = ry*fz - rz*fy, vy = rz*fx - rx*fz, vz = rx*fy - ry*fx;
-  float V4[16] = {rx, vx, -fx, 0,  ry, vy, -fy, 0,  rz, vz, -fz, 0,  -(rx*ex + ry*ey + rz*ez), -(vx*ex + vy*ey + vz*ez), fx*ex + fy*ey + fz*ez, 1};
   const float S = 34.f, nn = 20.f, ff = 180.f;
+  { float ts = 2*S/2048.f, a = ex*rx + ey*ry + ez*rz, b = ex*vx + ey*vy + ez*vz, da = floorf(a/ts + .5f)*ts - a, db = floorf(b/ts + .5f)*ts - b; ex += rx*da + vx*db; ey += ry*da + vy*db; ez += rz*da + vz*db; }
+  float V4[16] = {rx, vx, -fx, 0,  ry, vy, -fy, 0,  rz, vz, -fz, 0,  -(rx*ex + ry*ey + rz*ez), -(vx*ex + vy*ey + vz*ez), fx*ex + fy*ey + fz*ez, 1};
   float Pl[16] = {1/S,0,0,0, 0,1/S,0,0, 0,0,-2/(ff-nn),0, 0,0,-(ff+nn)/(ff-nn),1};
   mul(LM, Pl, V4);
 }
-static void shadowDraw(const float* LM) {
+static float shLM[16], shL[3] = {0, 1, 0}, shCx = 1e9f, shCy = 0, shCz = 1e9f;
+static void shadowPass(const float* LM) {   // only what touches the sun's box is drawn, from the same static batches as the main pass
+  PROF_SCOPE(3);
+  Frus lf; frustumFrom(lf, LM);
   glBindFramebuffer(GL_FRAMEBUFFER, shFbo); glViewport(0, 0, 2048, 2048);
   glClearColor(1, 1, 1, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
-  glUseProgram(shProg); glUniformMatrix4fv(uShLm, 1, 0, LM);
-  glUniformMatrix4fv(uShMm, 1, 0, ID4);
-  glBufferData(GL_ARRAY_BUFFER, sv.size()*sizeof(V), sv.data(), GL_STREAM_DRAW); glDrawArrays(GL_TRIANGLES, 0, (GLsizei)sv.size());
-  if (mReady) { for (const auto& p : pcs) { float M[16]; pcMat(M, p); drawModel(p.type, M, true); } useStream(); }
+  glUseProgram(shProg); glUniformMatrix4fv(uShLm, 1, 0, LM); glUniformMatrix4fv(uShMm, 1, 0, ID4); glUniform1f(uShInst, 0.f);
+  drawCells(lf, 0, true); drawCells(lf, 1, true); drawPlats(lf, true); drawPcsInst(lf, true);
+  glBindBuffer(GL_ARRAY_BUFFER, streamVbo); attribs();
   glBindFramebuffer(GL_FRAMEBUFFER, 0); glViewport(0, 0, W, H); glUseProgram(prog);
+}
+static void shadowUpdate(const float* L0) {   // the shadow map is cached: redrawn when the sun moved, the player left the middle of the box or a caster changed
+  float dl = fabsf(L0[0] - shL[0]) + fabsf(L0[1] - shL[1]) + fabsf(L0[2] - shL[2]), dx = px - shCx, dy = py - shCy, dz = pz - shCz;
+  if (!shDirty && dl < .012f && dx*dx + dy*dy + dz*dz < 6.25f) return;
+  shDirty = false; shCx = px; shCy = py; shCz = pz; shL[0] = L0[0]; shL[1] = L0[1]; shL[2] = L0[2];
+  lightMat(shLM, L0[0], L0[1], L0[2]); shadowPass(shLM);
+}
+static void setU(const float* A, const float* sky, float lit, float tx) { glUniformMatrix4fv(uM, 1, 0, A); glUniform3fv(uFog, 1, sky); glUniform1f(uLit, lit); glUniform1f(uTx, tx); txOn = tx; }
+static void drawWorld(const float* A, const float* sky, float lt, float lo) {
+  PROF_SCOPE(15);
+  glUniform1f(uInst, 0.f); glUniformMatrix4fv(uMm, 1, 0, ID4);
+  collectTerrain();
+  setU(A, sky, lo, 0.f); drawCells(fr, 0, false); drawPlats(fr, false);            // 1. opaque nodes: terrain pixels behind them never reach the heavy terrain shader (early z)
+  if (mReady) { setU(A, sky, lt, 0.f); drawPcsInst(fr, false); }                    // 2. building pieces, instanced
+  setU(A, sky, lt, 1.f); for (size_t i = 0; i < tvis.size(); i++) tcDraw(tvis[i]);  // 3. terrain
+  setU(A, sky, lt, 8.f); drawGrass(fr);                                             // 4. grass (wind in the vertex shader)
+  setU(A, sky, lo, 0.f); drawCells(fr, 1, false);                                   // 5. alpha-tested leaves last
+  setU(A, sky, lt, 2.f); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); for (size_t i = 0; i < tvis.size(); i++) tcWater(tvis[i]); glDisable(GL_BLEND);   // 6. water
+  setU(A, sky, lt, 0.f);
+  if (mReady && gh.on) { Pc g = {gh.type, gh.x, gh.y, gh.z, gh.yaw, gh.hinge, 0.f, 0.f}; float M[16]; pcMat(M, g); glUniform1f(uGt, gh.ok ? 1.f : 2.f); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); drawModel(g.type, M, false); glDisable(GL_BLEND); glUniform1f(uGt, 0.f); glUniformMatrix4fv(uMm, 1, 0, ID4); }
+  glBindBuffer(GL_ARRAY_BUFFER, streamVbo); attribs(); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); txOn = 0;
 }
 static void quadUV(float x, float y, float z, float ux, float uy, float uz, float vx, float vy, float vz, float e) {
   tv(x-ux-vx, y-uy-vy, z-uz-vz, 0, 0, e); tv(x+ux-vx, y+uy-vy, z+uz-vz, 1, 0, e); tv(x+ux+vx, y+uy+vy, z+uz+vz, 1, 1, e);
   tv(x-ux-vx, y-uy-vy, z-uz-vz, 0, 0, e); tv(x+ux+vx, y+uy+vy, z+uz+vz, 1, 1, e); tv(x-ux+vx, y+uy+vy, z-uz+vz, 0, 1, e);
-}
-static void pebbles() {   // stones on the beach
-  int cx = (int)floorf(px/2), cz = (int)floorf(pz/2);
-  for (int i = -16; i <= 16; i++) for (int j = -16; j <= 16; j++) {
-    int gx = cx + i, gz = cz + j; if (vn(gx*5+3, gz*7+1) < .86f) continue;
-    float x = (gx + vn(gx, gz+2))*2, z = (gz + vn(gz+5, gx))*2, h = meshH(x, z);
-    if (h < -.3f || h > 1.4f || (x-px)*(x-px) + (z-pz)*(z-pz) > 1000) continue;
-    float s = .12f + .3f*vn(gx+9, gz), g = .22f + .25f*vn(gz, gx+4);
-    blob(x, h - .03f, z, s, s*.55f, s*.8f, gx^gz, 3, .3f, 0);
-  }
 }
 static bool rdirty = true;
 static void roadTex() {   // keep the 256x256 unit road mask centred on the player (re-rasterised every 32 units) and bind it for the terrain shader
@@ -1026,33 +1383,8 @@ static void roadTex() {   // keep the 256x256 unit road mask centred on the play
   if (rdirty || cx != rox || cz != roz) { rasterWindow(px, pz); glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, RWN, RWN, 0, GL_RGBA, GL_UNSIGNED_BYTE, rbuf); rdirty = false; }
   glUniform1i(uRm, 0); glUniform3f(uRmo, rox, roz, RWS);
 }
-static void platProps() {   // placeholder monument: a pole with a flag and four corner bollards on every platform
-  for (const auto& p : plats) {
-    float dx = p.x - px, dz = p.z - pz; if (dx*dx + dz*dz > 16900.f) continue;
-    float c = cosf(p.yaw), s = sinf(p.yaw);
-    box(p.x, p.h, p.z, .5f, 7.f, .5f, .36f, .37f, .4f); box(p.x + .8f, p.h + 5.6f, p.z, 1.6f, .95f, .08f, .86f, .22f, .16f);
-    for (int k = 0; k < 4; k++) { float lx = (k & 1 ? 1.f : -1.f)*(p.hx - 1.2f), lz = (k & 2 ? 1.f : -1.f)*(p.hz - 1.2f); box(p.x + lx*c + lz*s, p.h, p.z - lx*s + lz*c, .6f, 1.1f, .6f, .9f, .74f, .12f); }
-  }
-}
-static void scene() {
-  pebbles(); platProps();
-  for (auto& o : nodes) {
-    if (o.hp <= 0) continue; float dx = o.x-px, dz = o.z-pz; if (dx*dx + dz*dz > 16900) continue;
-    float d2 = dx*dx + dz*dz; int lod = d2 < 1500 ? 0 : d2 < 5000 ? 1 : 2, sd0 = (int)(o.x*7) ^ (int)(o.z*13), ty = o.type;
-    if ((ty == 2 || ty == 8 || ty == 10) && d2 > 8100) continue;
-    if (ty == 0) pine(o.x, o.y, o.z, .9f + .6f*vn(sd0, 1), lod, 1);
-    else if (ty == 7) pine(o.x, o.y, o.z, .9f + .6f*vn(sd0, 1), lod, 3);
-    else if (ty == 1 || ty == 5 || ty == 6) ore(o.x, o.y, o.z, ty == 1 ? 0 : ty - 4, sd0, lod);
-    else if (ty == 2) bush(o.x, o.y, o.z, sd0, lod, 2);
-    else if (ty == 8) bush(o.x, o.y, o.z, sd0, lod, 4);
-    else if (ty == 10) bush(o.x, o.y, o.z, sd0, lod, 5);
-    else if (ty == 4) oak(o.x, o.y, o.z, .9f + .5f*vn(sd0, 2), sd0, lod);
-    else if (ty == 9) cactus(o.x, o.y, o.z, sd0, lod);
-    else palm(o.x, o.y, o.z);
-  }
-  for (auto& b : blks) { if (b.wall) box(b.x,b.y-1.2f,b.z,b.w,4.2f,b.d,.6f,.42f,.22f); else box(b.x,b.y-1.2f,b.z,b.w,1.5f,b.d,.5f,.35f,.18f); }
-}
 static void render(float dt) {
+  PROF_SCOPE(0);
   float k = fminf(fmaxf(sinf(tod*6.2832f)*2 + .5f, .06f), 1.f), dyf = fminf(fmaxf((k - .06f)/.94f, 0.f), 1.f), wm = fmaxf(0.f, 1.f - fabsf(sinf(tod*6.2832f))*6.f), sky[3] = {.07f + .59f*dyf + .3f*wm, .1f + .7f*dyf + .12f*wm, .2f + .75f*dyf - .05f*wm}, top[3] = {.01f + .19f*dyf, .02f + .4f*dyf, .07f + .78f*dyf};
   glViewport(0, 0, W, H); glClearColor(sky[0]*.7f, sky[1]*.82f, sky[2]*.98f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST); roadTex();
   float a = (float)W/H, f = 1/tanf(.55f), n = .1f, fa = 400.f;
@@ -1101,26 +1433,15 @@ static void render(float dt) {
     }
     glEnable(GL_DEPTH_TEST); txOn = 1;
   }
-  vb.clear(); scene(); sv.swap(vb);
-  float th2 = tod*6.2832f, L0[3] = {.62f*cosf(th2), sinf(th2), -.78f*cosf(th2)}, LM[16];
+  float th2 = tod*6.2832f, L0[3] = {.62f*cosf(th2), sinf(th2), -.78f*cosf(th2)};
   bool shOn = shOk && L0[1] > .08f;
+  frustumFrom(fr, A);
   if (shOn) {
-    lightMat(LM, L0[0], L0[1], L0[2]); shadowDraw(LM);
-    glUniformMatrix4fv(uLm, 1, 0, LM); glUniform1i(uSm, 1); glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, shTex); glActiveTexture(GL_TEXTURE0);
-  }
+    shadowUpdate(L0);
+    glUniformMatrix4fv(uLm, 1, 0, shLM); glUniform1i(uSm, 1); glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, shTex); glActiveTexture(GL_TEXTURE0);
+  } else shDirty = true;
   glUniform1f(uSs, shOn ? 1.f : 0.f);
-  terrain(); flush(A, sky, lt);
-  txOn = 8; grass(tt); flush(A, sky, lt);
-  txOn = 2; water(); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); flush(A, sky, lt); glDisable(GL_BLEND);
-  txOn = 0;
-  vb.swap(sv);
-  flush(A, sky, .25f + .75f*k);
-  if (mReady) {
-    glUniformMatrix4fv(uM, 1, 0, A); glUniform3fv(uFog, 1, sky); glUniform1f(uLit, lt); glUniform1f(uTx, 0);
-    for (const auto& p : pcs) { float M[16]; pcMat(M, p); drawModel(p.type, M, false); }
-    if (gh.on) { Pc g = {gh.type, gh.x, gh.y, gh.z, gh.yaw, gh.hinge, 0.f, 0.f}; float M[16]; pcMat(M, g); glUniform1f(uGt, gh.ok ? 1.f : 2.f); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); drawModel(g.type, M, false); glDisable(GL_BLEND); glUniform1f(uGt, 0.f); }
-    useStream(); glUniformMatrix4fv(uMm, 1, 0, ID4);
-  }
+  drawWorld(A, sky, lt, .25f + .75f*k);
   glDisable(GL_DEPTH_TEST);
   float I[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}, u = fminf(W, H)/400.f;
   if (st.id >= 0) {
@@ -1135,37 +1456,21 @@ static void render(float dt) {
     hud(b);
   }
 }
-static void genChunk(int cx, int cz) {
-  for (int i = 0; i < 60; i++) {
-    float x = (cx + vn(cx*17 + i, cz*31 + 5))*64.f, z = (cz + vn(cx*23 + 7, cz*19 + i))*64.f, sl, h = meshH(x, z, &sl), r = vn(cx*13 + i*3, cz*7 + i), bio = biomeAt(x, z);
-    if (hypotf(x - spX, z - spZ) < 6.f || h < .8f || sl > .5f || blockedAt(x, z)) continue;   // no water, no cliff faces, nothing on roads / platforms
-    int bi = bio < .5f ? 0 : bio < 1.5f ? 1 : 2, ty;
-    if (bi == 0) ty = h < 1.8f ? (r < .6f ? 2 : -1) : r < .25f ? 0 : r < .6f ? 4 : r < .69f ? 1 : r < .75f ? 5 : r < .8f ? 6 : 2;
-    else if (bi == 1) ty = r < .38f ? 9 : r < .5f ? 3 : r < .68f ? 10 : r < .78f ? 1 : r < .86f ? 5 : r < .92f ? 6 : -1;
-    else ty = r < .5f ? 7 : r < .68f ? 8 : r < .78f ? 1 : r < .85f ? 5 : r < .9f ? 6 : -1;
-    if (ty < 0) continue;
-    float rad = ty == 1 || ty == 5 || ty == 6 ? 1.7f : ty == 2 || ty == 8 || ty == 10 ? 1.5f : .7f;
-    float yy = fminf(h, fminf(fminf(meshH(x + rad, z), meshH(x - rad, z)), fminf(meshH(x, z + rad), meshH(x, z - rad))));   // sink into slopes, never float
-    nodes.push_back({x, z, 0, ty, ty == 0 || ty == 7 ? 5 : ty == 1 || ty == 5 || ty == 6 ? 7 : ty == 3 ? 4 : ty == 4 ? 5 : ty == 9 ? 3 : 1, yy});
-  }
-}
-static int ecx = -99999, ecz = -99999; static vector<long long> chunksDone;
-static void ensureChunks() {
-  int cx = (int)floorf(px/64), cz = (int)floorf(pz/64); if (cx == ecx && cz == ecz) return; ecx = cx; ecz = cz;
-  for (int i = -3; i <= 3; i++) for (int j = -3; j <= 3; j++) {
-    long long key = (long long)(cx + i)*100003LL + (cz + j); if (find(chunksDone.begin(), chunksDone.end(), key) != chunksDone.end()) continue;
-    chunksDone.push_back(key); genChunk(cx + i, cz + j);
-  }
-}
 static bool wInit = false;
 static void newWorld() {   // (re)generate everything from the menu settings
+#ifdef PROF
+  double tn0 = emscripten_get_now();
+#endif
   Cfg c; c.seed = wcf(0, 12345); c.size = (float)wcf(1, 1.4); c.plat = (int)wcf(2, 8); c.loops = (int)wcf(3, 1); c.trails = (int)wcf(4, 8);
-  genWorld(c);
-  nodes.clear(); chunksDone.clear(); ecx = ecz = -99999; pcs.clear(); blks.clear();
-  px = spX; pz = spZ; py = meshH(px, pz); vy = 0; yaw = spYaw; pitch = 0;
+  genWorld(c); resetWorldCaches();
+  px = spX; pz = spZ; py = meshH(px, pz); vy = 0; yaw = spYaw; pitch = 0; blks.clear();
   static unsigned char img[512*512*4]; fillMap(img, 512); mapImg(img, 512, WE);
-  rdirty = true; rox = 1e9f;
+  rdirty = true; rasterWindow(px, pz);   // the grass bake needs the road mask around the player
+  streamWorld(true);
   static bool first = true; if (!first) { char b[64]; snprintf(b, sizeof b, "Новый мир · сид %u", (unsigned)c.seed); say(b); msgT = 4; } first = false;
+#ifdef PROF
+  { char b[80]; snprintf(b, sizeof b, "PROF-NEW %.0f ms (world generation + first streaming)", emscripten_get_now() - tn0); EM_ASM({ console.log(UTF8ToString($0)); }, b); }
+#endif
   wready(c.seed, WS.nPlat, WS.roadLen, WS.trailLen);
 }
 static void loop() {
@@ -1176,29 +1481,35 @@ static void loop() {
   if (nw != W || nh != H) { W = nw; H = nh; emscripten_set_canvas_element_size("#canvas", W, H); }
   if (W < 2 || H < 2) return;
   if (!wInit || gk(12)) { newWorld(); wInit = true; }
-  ensureChunks(); update(dt); render(dt);
+  streamWorld(false); update(dt); render(dt);
+#ifdef PROF
+  profFrame();
+#endif
 }
 int main() {
   EmscriptenWebGLContextAttributes a; emscripten_webgl_init_context_attributes(&a); a.majorVersion = 1; a.antialias = 0;
-  auto gctx = emscripten_webgl_create_context("#canvas", &a); emscripten_webgl_make_context_current(gctx); emscripten_webgl_enable_extension(gctx, "OES_standard_derivatives");
+  auto gctx = emscripten_webgl_create_context("#canvas", &a); emscripten_webgl_make_context_current(gctx); emscripten_webgl_enable_extension(gctx, "OES_standard_derivatives"); instOk = emscripten_webgl_enable_extension(gctx, "ANGLE_instanced_arrays");
+#ifdef NO_INST
+  instOk = false;
+#endif
   GLuint p = glCreateProgram(); glAttachShader(p, sh(GL_VERTEX_SHADER, VS)); glAttachShader(p, sh(GL_FRAGMENT_SHADER, FS));
-  glBindAttribLocation(p, 0, "p"); glBindAttribLocation(p, 1, "c"); glLinkProgram(p); glUseProgram(p); prog = p;
-  uM = glGetUniformLocation(p, "m"); uFog = glGetUniformLocation(p, "fog"); uLit = glGetUniformLocation(p, "lit"); uTx = glGetUniformLocation(p, "tx"); uSd = glGetUniformLocation(p, "sd"); uEy = glGetUniformLocation(p, "ey"); uTm = glGetUniformLocation(p, "tm"); uLm = glGetUniformLocation(p, "lm"); uSm = glGetUniformLocation(p, "sm"); uSs = glGetUniformLocation(p, "ss"); uMm = glGetUniformLocation(p, "mm"); uGt = glGetUniformLocation(p, "gt"); uRm = glGetUniformLocation(p, "rm"); uRmo = glGetUniformLocation(p, "rmo"); glUniform1i(uRm, 0); glUniformMatrix4fv(uMm, 1, 0, ID4); { const char* tn[6] = {"t0", "t1", "t2", "t3", "t4", "t5"}; for (int k = 0; k < 6; k++) glUniform1i(glGetUniformLocation(p, tn[k]), 2 + k); }
+  glBindAttribLocation(p, 0, "p"); glBindAttribLocation(p, 1, "c"); glBindAttribLocation(p, 2, "i0"); glBindAttribLocation(p, 3, "i1"); glBindAttribLocation(p, 4, "i2"); glBindAttribLocation(p, 5, "i3"); glLinkProgram(p); glUseProgram(p); prog = p;
+  uInst = glGetUniformLocation(p, "inst"); uM = glGetUniformLocation(p, "m"); uFog = glGetUniformLocation(p, "fog"); uLit = glGetUniformLocation(p, "lit"); uTx = glGetUniformLocation(p, "tx"); uSd = glGetUniformLocation(p, "sd"); uEy = glGetUniformLocation(p, "ey"); uTm = glGetUniformLocation(p, "tm"); uLm = glGetUniformLocation(p, "lm"); uSm = glGetUniformLocation(p, "sm"); uSs = glGetUniformLocation(p, "ss"); uMm = glGetUniformLocation(p, "mm"); uGt = glGetUniformLocation(p, "gt"); uRm = glGetUniformLocation(p, "rm"); uRmo = glGetUniformLocation(p, "rmo"); glUniform1i(uRm, 0); glUniformMatrix4fv(uMm, 1, 0, ID4); { const char* tn[6] = {"t0", "t1", "t2", "t3", "t4", "t5"}; for (int k = 0; k < 6; k++) glUniform1i(glGetUniformLocation(p, tn[k]), 2 + k); }
   { GLuint dt; glGenTextures(1, &dt); dummyTex = dt; glBindTexture(GL_TEXTURE_2D, dt); unsigned char w4[4] = {255, 255, 255, 255}; glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, w4); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST); for (int k = 2; k <= 7; k++) { glActiveTexture(GL_TEXTURE0 + k); glBindTexture(GL_TEXTURE_2D, dt); } glActiveTexture(GL_TEXTURE0); }
   { glGenTextures(1, &rTex); glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, rTex); glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, RWN, RWN, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE); }   // road / trail / platform mask
-  GLuint bf; glGenBuffers(1, &bf); glBindBuffer(GL_ARRAY_BUFFER, bf); streamVbo = bf;
+  GLuint bf; glGenBuffers(1, &bf); glBindBuffer(GL_ARRAY_BUFFER, bf); streamVbo = bf; tcIndices(); glGenBuffers(1, &instVbo); glBindBuffer(GL_ARRAY_BUFFER, bf);
   glEnableVertexAttribArray(0); glEnableVertexAttribArray(1);
   glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, (void*)0); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12);
   {
-    const char* svs = "attribute vec3 p;attribute vec3 c;uniform mat4 lm;uniform mat4 mm;varying float z;varying vec3 vc;void main(){gl_Position=lm*(mm*vec4(p,1.));z=gl_Position.z*.5+.5;vc=c;}";
+    const char* svs = "attribute vec3 p;attribute vec3 c;attribute vec4 i0;attribute vec4 i1;attribute vec4 i2;attribute vec4 i3;uniform mat4 lm;uniform mat4 mm;uniform float inst;varying float z;varying vec3 vc;void main(){gl_Position=lm*((inst>.5?mat4(i0,i1,i2,i3):mm)*vec4(p,1.));z=gl_Position.z*.5+.5;vc=c;}";
     const char* sfs = "precision highp float;varying float z;varying vec3 vc;"
       "float h(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}"
       "float lf(vec2 q){vec2 i=floor(q),f=fract(q)-.5;float a=h(i)*6.283;f+=(vec2(h(i+7.),h(i+13.))-.5)*.3;vec2 r=vec2(cos(a)*f.x+sin(a)*f.y,-sin(a)*f.x+cos(a)*f.y);return 1.-step(1.,length(r/vec2(.52,.24)));}float lfm(vec2 u){return max(lf(u*5.),lf(u*6.+3.1))*step(length(u-.5),.5);}"
       "void main(){if(vc.b>1.5&&vc.b<19.5&&lfm(vc.xy)<.5)discard;vec4 e=fract(z*vec4(1.,255.,65025.,16581375.));e-=e.yzww*vec4(1./255.,1./255.,1./255.,0.);gl_FragColor=e;}";
     shProg = glCreateProgram(); glAttachShader(shProg, sh(GL_VERTEX_SHADER, svs)); glAttachShader(shProg, sh(GL_FRAGMENT_SHADER, sfs));
-    glBindAttribLocation(shProg, 0, "p"); glBindAttribLocation(shProg, 1, "c"); glLinkProgram(shProg); uShLm = glGetUniformLocation(shProg, "lm"); uShMm = glGetUniformLocation(shProg, "mm"); glUseProgram(shProg); glUniformMatrix4fv(uShMm, 1, 0, ID4); glUseProgram(p);
+    glBindAttribLocation(shProg, 0, "p"); glBindAttribLocation(shProg, 1, "c"); glBindAttribLocation(shProg, 2, "i0"); glBindAttribLocation(shProg, 3, "i1"); glBindAttribLocation(shProg, 4, "i2"); glBindAttribLocation(shProg, 5, "i3"); glLinkProgram(shProg); uShInst = glGetUniformLocation(shProg, "inst"); uShLm = glGetUniformLocation(shProg, "lm"); uShMm = glGetUniformLocation(shProg, "mm"); glUseProgram(shProg); glUniformMatrix4fv(uShMm, 1, 0, ID4); glUseProgram(p);
     glGenTextures(1, &shTex); glBindTexture(GL_TEXTURE_2D, shTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2048, 2048, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
