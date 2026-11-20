@@ -783,7 +783,7 @@ struct Cell { unsigned vbo[2]; int n[2]; float y0, y1; signed char band; bool di
 struct NChunk { int cx, cz, n, dead; bool mod; vector<float> x, z, y, t; vector<int> type, hp; vector<signed char> cell; Cell c[4]; };
 static unordered_map<long long, NChunk*> nchm;
 struct DeadRef { NChunk* c; int i; }; static vector<DeadRef> deadList;   // harvested nodes waiting to respawn (event driven, nothing else is touched)
-static int nodeHp(int ty) { return ty == 0 || ty == 7 ? 5 : ty == 1 || ty == 5 || ty == 6 ? 7 : ty == 3 ? 4 : ty == 4 ? 5 : ty == 9 ? 3 : 1; }
+static int nodeHp(int ty) { return ty == 0 || ty == 7 || ty == 11 || ty == 12 ? 5 : ty == 1 || ty == 5 || ty == 6 ? 7 : ty == 3 ? 4 : ty == 4 ? 5 : ty == 9 ? 3 : 1; }
 static NChunk* ncFind(int cx, int cz) { auto it = nchm.find(ckey(cx, cz)); return it == nchm.end() ? 0 : it->second; }
 static void nodeStep(float dt) {   // collision with the nodes around the player (3x3 chunks) + respawn timers
   int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS);
@@ -792,7 +792,7 @@ static void nodeStep(float dt) {   // collision with the nodes around the player
     for (int k = 0; k < c->n; k++) {
       float nx = c->x[k], nz = c->z[k]; if (c->hp[k] <= 0 || fabsf(nx - px) > 2.2f || fabsf(nz - pz) > 2.2f) continue;   // cheap reject first: nothing farther than 2.2 can touch the player
       int ty = c->type[k];
-      if (ty != 2 && ty != 8 && ty != 10) { float r = ty == 0 || ty == 4 || ty == 7 ? .9f : ty == 1 || ty == 5 || ty == 6 ? 1.3f : ty == 9 ? .6f : .5f; push(px, pz, nx - r, nz - r, nx + r, nz + r); }
+      if (ty != 2 && ty != 8 && ty != 10) { float r = ty == 0 || ty == 4 || ty == 7 || ty == 11 || ty == 12 ? .9f : ty == 1 || ty == 5 || ty == 6 ? 1.3f : ty == 9 ? .6f : .5f; push(px, pz, nx - r, nz - r, nx + r, nz + r); }
       else { float bx = px - nx, bz = pz - nz; if (bx*bx + bz*bz < 3.5f) inBush = true; }
     }
   }
@@ -913,7 +913,7 @@ static void act() {
   if (!bc) { if (hgt(px + fx*3, pz + fz*3) < -.2f) { thirst = fminf(100.f, thirst + 18); say("Пьёшь воду"); } else say("Мимо"); return; }
   int ty = bc->type[bi]; bc->mod = true;
   if (--bc->hp[bi] <= 0) { bc->t[bi] = 60; bc->dead++; deadList.push_back(DeadRef{bc, bi}); bc->c[bc->cell[bi]].dirty = true; shDirty = true; }
-  if (ty == 0 || ty == 3 || ty == 4 || ty == 7) { wood += 10; say("+10 дерева"); }
+  if (ty == 0 || ty == 3 || ty == 4 || ty == 7 || ty == 11 || ty == 12) { wood += 10; say("+10 дерева"); }
   else if (ty == 1) { stone += 8; say("+8 камня"); }
   else if (ty == 5) { metal += 6; say("+6 металла"); }
   else if (ty == 6) { sulfur += 6; say("+6 серы"); }
@@ -1065,6 +1065,23 @@ static void oak(float x, float y, float z, float sc, int seed, int lod) {
   }
   crown(x, y + 5.8f*sc, z, 2.4f*sc, n, seed + 41, 0, cs);
 }
+static void birch(float x, float y, float z, float sc, int seed, int lod) {
+  float lean = (vn(seed, 19) - .5f)*.35f*sc;
+  seg(x, y-.25f, z, x+lean*.35f, y+2.8f*sc, z-lean*.2f, .3f*sc, .17f*sc, .78f, .76f, .65f);
+  seg(x+lean*.35f, y+2.8f*sc, z-lean*.2f, x+lean, y+5.1f*sc, z-lean*.5f, .17f*sc, .07f*sc, .8f, .78f, .68f);
+  int n = lod == 0 ? 15 : lod == 1 ? 8 : 4; float cs = lod == 0 ? .85f : lod == 1 ? 1.2f : 1.8f;
+  crown(x+lean, y+5.1f*sc, z-lean*.5f, 1.8f*sc, n, seed+31, 0, cs);
+  crown(x-1.1f*sc, y+4.6f*sc, z+.25f*sc, 1.45f*sc, n, seed+47, 0, cs);
+  crown(x+1.1f*sc, y+4.7f*sc, z-.25f*sc, 1.5f*sc, n, seed+59, 0, cs);
+}
+static void spruce(float x, float y, float z, float sc, int seed, int lod) {
+  int tiers = lod == 0 ? 6 : lod == 1 ? 4 : 3;
+  seg(x, y-.25f, z, x, y+8.f*sc, z, .38f*sc, .09f*sc, .32f, .23f, .14f);
+  for (int q = 0; q < tiers; q++) { float f=q/(float)tiers, h=(1.6f+f*5.7f)*sc, r=(2.25f*(1.f-f*.72f))*sc;
+    cone(x, y+h, z, r, 2.5f*sc*(1.f-f*.42f), .08f, .24f, .13f);
+  }
+  (void)seed;
+}
 static void bush(float x, float y, float z, int seed, int lod, int pal) {   // two kinds: wide mound / taller shrub (pal 2 green, 4 snow, 5 dry)
   float cs = lod == 0 ? 1.f : lod == 1 ? 1.4f : 2.f, k = lod == 0 ? 1.f : lod == 1 ? 2.f : 3.f; if (pal == 5) k *= 1.5f;
   if (lod < 2) for (int q = 0; q < 4; q++) { float a = q*1.57f + vn(seed, q); seg(x, y-.2f, z, x + cosf(a)*.9f, y + .9f, z + sinf(a)*.9f, .05f, .025f, .32f, .22f, .12f); }
@@ -1157,15 +1174,25 @@ static void ncGen(int cx, int cz) {
   NChunk* c = new NChunk(); c->cx = cx; c->cz = cz; c->dead = 0; c->mod = false;
   for (int k = 0; k < 4; k++) { Cell& e = c->c[k]; e.vbo[0] = e.vbo[1] = 0; e.n[0] = e.n[1] = 0; e.y0 = 0; e.y1 = 1; e.band = -1; e.dirty = true; e.built = false; }
   c->x.reserve(48); c->z.reserve(48); c->y.reserve(48); c->t.reserve(48); c->type.reserve(48); c->hp.reserve(48); c->cell.reserve(48);
-  for (int i = 0; i < 60; i++) {
-    float x = (cx + vn(cx*17 + i, cz*31 + 5))*64.f, z = (cz + vn(cx*23 + 7, cz*19 + i))*64.f, sl, h = meshH(x, z, &sl), r = vn(cx*13 + i*3, cz*7 + i), bio = biomeAt(x, z);
-    if (hypotf(x - spX, z - spZ) < 6.f || h < .8f || sl > .5f || blockedAt(x, z)) continue;   // no water, no cliff faces, nothing on roads / platforms
-    int bi = bio < .5f ? 0 : bio < 1.5f ? 1 : 2, ty;
-    if (bi == 0) ty = h < 1.8f ? (r < .6f ? 2 : -1) : r < .25f ? 0 : r < .6f ? 4 : r < .69f ? 1 : r < .75f ? 5 : r < .8f ? 6 : 2;
-    else if (bi == 1) ty = r < .38f ? 9 : r < .5f ? 3 : r < .68f ? 10 : r < .78f ? 1 : r < .86f ? 5 : r < .92f ? 6 : -1;
-    else ty = r < .5f ? 7 : r < .68f ? 8 : r < .78f ? 1 : r < .85f ? 5 : r < .9f ? 6 : -1;
+  // Deterministic jittered lattice: low-frequency noise makes forests, groves and clearings.
+  for (int i = 0; i < 64; i++) {
+    int gx = i % 8, gz = i / 8;
+    float x = cx*64.f + (gx + .12f + .76f*vn(cx*29 + gx*7, cz*37 + gz))*8.f;
+    float z = cz*64.f + (gz + .12f + .76f*vn(cx*41 + gx*11, cz*23 + gz*5))*8.f;
+    float sl, h = meshH(x, z, &sl), r = vn(cx*13 + i*3, cz*7 + i), bio = biomeAt(x, z);
+    float stand = pn(x*.018f + 31.f, z*.018f - 17.f), clearing = pn(x*.055f - 8.f, z*.055f + 12.f);
+    if (hypotf(x - spX, z - spZ) < 6.f || h < .8f || h > 62.f || sl > .42f || blockedAt(x, z)) continue;
+    int bi = bio < .5f ? 0 : bio < 1.5f ? 1 : 2, ty = -1;
+    float chance = .18f + .68f*stand; if (clearing > .72f) chance *= .16f;
+    if (r > chance) continue;
+    if (bi == 0) {
+      if (h < 1.8f) ty = r < .7f ? 2 : -1;
+      else if (stand > .72f) ty = r < .22f ? 0 : r < .48f ? 11 : r < .72f ? 12 : r < .82f ? 4 : 2;
+      else ty = r < .18f ? 0 : r < .38f ? 4 : r < .52f ? 11 : r < .62f ? 12 : r < .82f ? 2 : -1;
+    } else if (bi == 1) ty = r < .34f ? 9 : r < .54f ? 3 : r < .72f ? 10 : r < .83f ? 1 : -1;
+    else ty = r < .46f ? 7 : r < .62f ? 12 : r < .76f ? 8 : r < .86f ? 1 : -1;
     if (ty < 0) continue;
-    float rad = ty == 1 || ty == 5 || ty == 6 ? 1.7f : ty == 2 || ty == 8 || ty == 10 ? 1.5f : .7f;
+    float rad = ty == 1 || ty == 5 || ty == 6 ? 1.7f : ty == 2 || ty == 8 || ty == 10 ? 1.5f : ty == 11 || ty == 12 ? 1.25f : .7f;
     float yy = fminf(h, fminf(fminf(meshH(x + rad, z), meshH(x - rad, z)), fminf(meshH(x, z + rad), meshH(x, z - rad))));   // sink into slopes, never float
     c->x.push_back(x); c->z.push_back(z); c->y.push_back(yy); c->t.push_back(0.f); c->type.push_back(ty); c->hp.push_back(nodeHp(ty));
     c->cell.push_back((signed char)((x - cx*64.f >= 32.f ? 1 : 0) + (z - cz*64.f >= 32.f ? 2 : 0)));
@@ -1191,6 +1218,8 @@ static void cellBuild(NChunk* c, int k, int band) {
     float nx = c->x[i], ny = c->y[i], nz = c->z[i]; int sd0 = (int)(nx*7) ^ (int)(nz*13);
     if (ty == 0) pine(nx, ny, nz, .9f + .6f*vn(sd0, 1), lod, 1);
     else if (ty == 7) pine(nx, ny, nz, .9f + .6f*vn(sd0, 1), lod, 3);
+    else if (ty == 11) birch(nx, ny, nz, .8f + .55f*vn(sd0, 4), sd0, lod);
+    else if (ty == 12) spruce(nx, ny, nz, .75f + .6f*vn(sd0, 5), sd0, lod);
     else if (ty == 1 || ty == 5 || ty == 6) ore(nx, ny, nz, ty == 1 ? 0 : ty - 4, sd0, lod);
     else if (ty == 2) bush(nx, ny, nz, sd0, lod, 2);
     else if (ty == 8) bush(nx, ny, nz, sd0, lod, 4);
