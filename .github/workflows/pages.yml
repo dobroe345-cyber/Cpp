@@ -19,8 +19,11 @@ jobs:
       - name: Compile C++ to WebAssembly
         run: |
           mkdir dist
-          emcc main.cpp -O2 -std=c++17 -lGL -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_RUNTIME_METHODS=UTF8ToString -o dist/game.js
+          em++ main.cpp -O2 -std=c++17 -lGL -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_RUNTIME_METHODS=UTF8ToString -o dist/game.js
           cp index.html dist/
+          cp -r icons dist/ 2>/dev/null || true
+          cp -r models dist/ 2>/dev/null || true
+          cp -r sounds dist/ 2>/dev/null || true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
