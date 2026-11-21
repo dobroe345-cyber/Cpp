@@ -783,7 +783,7 @@ struct Cell { unsigned vbo[2]; int n[2]; float y0, y1; signed char band; bool di
 struct NChunk { int cx, cz, n, dead; bool mod; vector<float> x, z, y, t; vector<int> type, hp; vector<signed char> cell; Cell c[4]; };
 static unordered_map<long long, NChunk*> nchm;
 struct DeadRef { NChunk* c; int i; }; static vector<DeadRef> deadList;   // harvested nodes waiting to respawn (event driven, nothing else is touched)
-static int nodeHp(int ty) { return ty == 0 || ty == 7 || ty == 11 || ty == 12 ? 5 : ty == 1 || ty == 5 || ty == 6 ? 7 : ty == 3 ? 4 : ty == 4 ? 5 : ty == 9 ? 3 : 1; }
+static int nodeHp(int ty) { return ty == 0 || ty == 4 || ty == 7 || (ty >= 11 && ty <= 17) ? 5 : ty == 1 || ty == 5 || ty == 6 ? 7 : ty == 3 ? 4 : ty == 9 ? 3 : 1; }
 static NChunk* ncFind(int cx, int cz) { auto it = nchm.find(ckey(cx, cz)); return it == nchm.end() ? 0 : it->second; }
 static void nodeStep(float dt) {   // collision with the nodes around the player (3x3 chunks) + respawn timers
   int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS);
@@ -792,7 +792,7 @@ static void nodeStep(float dt) {   // collision with the nodes around the player
     for (int k = 0; k < c->n; k++) {
       float nx = c->x[k], nz = c->z[k]; if (c->hp[k] <= 0 || fabsf(nx - px) > 2.2f || fabsf(nz - pz) > 2.2f) continue;   // cheap reject first: nothing farther than 2.2 can touch the player
       int ty = c->type[k];
-      if (ty != 2 && ty != 8 && ty != 10) { float r = ty == 0 || ty == 4 || ty == 7 || ty == 11 || ty == 12 ? .9f : ty == 1 || ty == 5 || ty == 6 ? 1.3f : ty == 9 ? .6f : .5f; push(px, pz, nx - r, nz - r, nx + r, nz + r); }
+      if (ty != 2 && ty != 8 && ty != 10 && ty != 14 && ty != 15 && ty != 16) { float r = ty == 0 || ty == 4 || ty == 7 || (ty >= 11 && ty <= 13) ? .9f : ty == 1 || ty == 5 || ty == 6 ? 1.3f : ty == 9 || ty == 17 ? .6f : .5f; push(px, pz, nx - r, nz - r, nx + r, nz + r); }
       else { float bx = px - nx, bz = pz - nz; if (bx*bx + bz*bz < 3.5f) inBush = true; }
     }
   }
@@ -913,7 +913,7 @@ static void act() {
   if (!bc) { if (hgt(px + fx*3, pz + fz*3) < -.2f) { thirst = fminf(100.f, thirst + 18); say("Пьёшь воду"); } else say("Мимо"); return; }
   int ty = bc->type[bi]; bc->mod = true;
   if (--bc->hp[bi] <= 0) { bc->t[bi] = 60; bc->dead++; deadList.push_back(DeadRef{bc, bi}); bc->c[bc->cell[bi]].dirty = true; shDirty = true; }
-  if (ty == 0 || ty == 3 || ty == 4 || ty == 7 || ty == 11 || ty == 12) { wood += 10; say("+10 дерева"); }
+  if (ty == 0 || ty == 3 || ty == 4 || ty == 7 || (ty >= 11 && ty <= 17)) { wood += 10; say("+10 дерева"); }
   else if (ty == 1) { stone += 8; say("+8 камня"); }
   else if (ty == 5) { metal += 6; say("+6 металла"); }
   else if (ty == 6) { sulfur += 6; say("+6 серы"); }
@@ -1066,6 +1066,7 @@ static void oak(float x, float y, float z, float sc, int seed, int lod) {
   crown(x, y + 5.8f*sc, z, 2.4f*sc, n, seed + 41, 0, cs);
 }
 static void birch(float x, float y, float z, float sc, int seed, int lod) {
+  /* profile family: birch_short, birch_tall_01 and birch_tall_02 */
   float lean = (vn(seed, 19) - .5f)*.35f*sc;
   seg(x, y-.25f, z, x+lean*.35f, y+2.8f*sc, z-lean*.2f, .3f*sc, .17f*sc, .78f, .76f, .65f);
   seg(x+lean*.35f, y+2.8f*sc, z-lean*.2f, x+lean, y+5.1f*sc, z-lean*.5f, .17f*sc, .07f*sc, .8f, .78f, .68f);
@@ -1075,6 +1076,8 @@ static void birch(float x, float y, float z, float sc, int seed, int lod) {
   crown(x+1.1f*sc, y+4.7f*sc, z-.25f*sc, 1.5f*sc, n, seed+59, 0, cs);
 }
 static void spruce(float x, float y, float z, float sc, int seed, int lod) {
+  /* profile family: spruce_small, spruce_mid and spruce_tall */
+  sc *= .88f + .24f*vn(seed, 77);
   int tiers = lod == 0 ? 6 : lod == 1 ? 4 : 3;
   seg(x, y-.25f, z, x, y+8.f*sc, z, .38f*sc, .09f*sc, .32f, .23f, .14f);
   for (int q = 0; q < tiers; q++) { float f=q/(float)tiers, h=(1.6f+f*5.7f)*sc, r=(2.25f*(1.f-f*.72f))*sc;
@@ -1082,7 +1085,8 @@ static void spruce(float x, float y, float z, float sc, int seed, int lod) {
   }
   (void)seed;
 }
-static void bush(float x, float y, float z, int seed, int lod, int pal) {   // two kinds: wide mound / taller shrub (pal 2 green, 4 snow, 5 dry)
+static void bush(float x, float y, float z, int seed, int lod, int pal) {   // procedural stand-in for bush_tall, bush_wide, bush_hedge and bush_dry
+  float profile = vn(seed, 91); if (profile < .25f) pal = 2; else if (profile < .5f) pal = 2; else if (profile < .75f) pal = 4; else pal = 5;
   float cs = lod == 0 ? 1.f : lod == 1 ? 1.4f : 2.f, k = lod == 0 ? 1.f : lod == 1 ? 2.f : 3.f; if (pal == 5) k *= 1.5f;
   if (lod < 2) for (int q = 0; q < 4; q++) { float a = q*1.57f + vn(seed, q); seg(x, y-.2f, z, x + cosf(a)*.9f, y + .9f, z + sinf(a)*.9f, .05f, .025f, .32f, .22f, .12f); }
   if (seed & 1) {
@@ -1187,10 +1191,10 @@ static void ncGen(int cx, int cz) {
     if (r > chance) continue;
     if (bi == 0) {
       if (h < 1.8f) ty = r < .7f ? 2 : -1;
-      else if (stand > .72f) ty = r < .22f ? 0 : r < .48f ? 11 : r < .72f ? 12 : r < .82f ? 4 : 2;
-      else ty = r < .18f ? 0 : r < .38f ? 4 : r < .52f ? 11 : r < .62f ? 12 : r < .82f ? 2 : -1;
-    } else if (bi == 1) ty = r < .34f ? 9 : r < .54f ? 3 : r < .72f ? 10 : r < .83f ? 1 : -1;
-    else ty = r < .46f ? 7 : r < .62f ? 12 : r < .76f ? 8 : r < .86f ? 1 : -1;
+      else if (stand > .72f) ty = r < .17f ? 0 : r < .34f ? 11 : r < .49f ? 12 : r < .61f ? 13 : r < .77f ? 4 : r < .87f ? 14 : 15;
+      else ty = r < .14f ? 0 : r < .28f ? 4 : r < .4f ? 11 : r < .49f ? 12 : r < .57f ? 13 : r < .75f ? 2 : r < .84f ? 14 : 15;
+    } else if (bi == 1) ty = r < .31f ? 9 : r < .47f ? 17 : r < .57f ? 3 : r < .67f ? 10 : r < .75f ? 16 : r < .83f ? 1 : -1;
+    else ty = r < .40f ? 7 : r < .55f ? 12 : r < .64f ? 11 : r < .75f ? 8 : r < .84f ? 1 : -1;
     if (ty < 0) continue;
     float rad = ty == 1 || ty == 5 || ty == 6 ? 1.7f : ty == 2 || ty == 8 || ty == 10 ? 1.5f : ty == 11 || ty == 12 ? 1.25f : .7f;
     float yy = fminf(h, fminf(fminf(meshH(x + rad, z), meshH(x - rad, z)), fminf(meshH(x, z + rad), meshH(x, z - rad))));   // sink into slopes, never float
@@ -1214,12 +1218,17 @@ static void cellBuild(NChunk* c, int k, int band) {
   Cell& e = c->c[k]; vb.clear(); int lod = band > 2 ? 2 : band;
   for (int i = 0; i < c->n; i++) {
     if (c->cell[i] != k || c->hp[i] <= 0) continue;
-    int ty = c->type[i]; if ((ty == 2 || ty == 8 || ty == 10) && band > 2) continue;
+    int ty = c->type[i]; if ((ty == 2 || ty == 8 || ty == 10 || ty == 14 || ty == 15 || ty == 16) && band > 2) continue;
     float nx = c->x[i], ny = c->y[i], nz = c->z[i]; int sd0 = (int)(nx*7) ^ (int)(nz*13);
     if (ty == 0) pine(nx, ny, nz, .9f + .6f*vn(sd0, 1), lod, 1);
     else if (ty == 7) pine(nx, ny, nz, .9f + .6f*vn(sd0, 1), lod, 3);
-    else if (ty == 11) birch(nx, ny, nz, .8f + .55f*vn(sd0, 4), sd0, lod);
-    else if (ty == 12) spruce(nx, ny, nz, .75f + .6f*vn(sd0, 5), sd0, lod);
+    else if (ty == 11) birch(nx, ny, nz, .65f + .42f*vn(sd0, 4), sd0, lod);
+    else if (ty == 12) spruce(nx, ny, nz, .72f + .5f*vn(sd0, 5), sd0, lod);
+    else if (ty == 13) oak(nx, ny, nz, .72f + .48f*vn(sd0, 6), sd0 + 13, lod);
+    else if (ty == 14) bush(nx, ny, nz, sd0, lod, 2);
+    else if (ty == 15) bush(nx, ny, nz, sd0 ^ 0x51f, lod, 2);
+    else if (ty == 16) bush(nx, ny, nz, sd0 ^ 0x2a7, lod, 5);
+    else if (ty == 17) cactus(nx, ny, nz, sd0 + 17, lod);
     else if (ty == 1 || ty == 5 || ty == 6) ore(nx, ny, nz, ty == 1 ? 0 : ty - 4, sd0, lod);
     else if (ty == 2) bush(nx, ny, nz, sd0, lod, 2);
     else if (ty == 8) bush(nx, ny, nz, sd0, lod, 4);
