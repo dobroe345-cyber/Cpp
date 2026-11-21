@@ -102,7 +102,7 @@ static const char* FS = "#extension GL_OES_standard_derivatives : enable\n"
   "else if(tx<1.5){vec2 p=wp.xz;float hh=wp.y,sl=1.-vc.g,bio=vc.b,li=vc.r,big=n(p*.07),mid=n(p*.6),fine=n(p*3.)*.5+n(p*13.)*.5;"
   "vec3 gr=mix(vec3(.2,.4,.12),vec3(.34,.5,.16),mid);gr=mix(gr,gr*vec3(1.35,1.1,.55),smoothstep(.45,.8,big)*.8);vec3 sa=mix(vec3(.74,.66,.46),vec3(.83,.75,.55),fine),ds=mix(vec3(.82,.6,.34),vec3(.92,.72,.44),mid),sw=mix(vec3(.86,.9,.97),vec3(.98,.99,1.),fine),rkc=mix(vec3(.46,.44,.4),vec3(.6,.57,.52),fine)*(.78+.3*n(vec2(hh*1.3+n(p*.05)*4.,(p.x+p.y)*.015)))*(.9+.15*n(p*.9));"
   "float sf=1.-smoothstep(.8,2.3,hh+(n(p*.35)-.5)*1.6+(fine-.5)*.6),dz=smoothstep(.2,.8,bio)*(1.-smoothstep(1.2,1.8,bio)),sz=smoothstep(1.2,1.8,bio);"
-  "vec3 al=mix(gr,sa,sf);al=mix(al,ds*(.9+.2*sin(p.x*.5+p.y*.3+n(p*.15)*6.)),dz);al=mix(al,sw,sz*(1.-.5*sf));al*=mix(.62,1.,smoothstep(-.3,.5,hh));al=mix(al,rkc*mix(1.,1.15,sz),max(smoothstep(.1,.2,sl+(fine-.5)*.05),smoothstep(38.,60.,hh+(big-.5)*20.)*smoothstep(.03,.08,sl)));"
+  "vec3 al=mix(gr,sa,sf);al=mix(al,ds*(.9+.2*sin(p.x*.5+p.y*.3+n(p*.15)*6.)),dz);al=mix(al,sw,sz*(1.-.5*sf));al*=mix(.62,1.,smoothstep(-.3,.5,hh));vec3 desertRock=mix(vec3(.48,.27,.14),vec3(.78,.48,.22),fine);vec3 temperateRock=mix(vec3(.34,.35,.32),vec3(.56,.52,.45),fine);vec3 winterRock=mix(vec3(.52,.55,.57),vec3(.8,.82,.84),fine);vec3 biomeRock=mix(temperateRock,desertRock,dz);biomeRock=mix(biomeRock,winterRock,sz);al=mix(al,biomeRock*mix(1.,1.12,sz),max(smoothstep(.1,.2,sl+(fine-.5)*.05),smoothstep(38.,60.,hh+(big-.5)*20.)*smoothstep(.03,.08,sl)));"
   "vec4 rv=texture2D(rm,(wp.xz-rmo.xy)/rmo.z);if(rv.r+rv.g+rv.b>.01){float g2=n(p*22.)*.5+n(p*7.)*.5,ra=smoothstep(.44,.56,rv.r),rg=smoothstep(.03,.3,rv.r),tq=smoothstep(.3,.62,rv.g+(fine-.5)*.3),pa=smoothstep(.46,.54,rv.b),mq=smoothstep(.46,.54,rv.a);vec3 tc=mix(mix(vec3(.4,.3,.19),vec3(.5,.39,.25),g2),mix(vec3(.66,.5,.3),vec3(.72,.57,.35),g2),dz);tc=mix(tc,vec3(.55,.5,.46),sz*.7);vec3 ac=vec3(.21,.21,.22)*(.8+.5*g2)*(.9+.2*n(p*1.5)),gv=mix(vec3(.45,.4,.34),vec3(.55,.5,.42),g2),rc=mix(gv,ac,ra);rc=mix(rc,sw,sz*.35*(1.-ra));vec3 cc=mix(vec3(.5),vec3(.62,.62,.6),g2)*(.88+.2*n(p*.8));al=mix(al,tc,tq*.92);al=mix(al,rc,rg);al=mix(al,cc,pa);al=mix(al,rv.b>.5?vec3(.92,.74,.1):vec3(.9,.82,.5),mq*max(ra,pa));}"
   "c=al*li*(.7+.55*(mid*.35+fine*.65));float nt=1.-clamp(normalize(sd).y*4.+.6,0.,1.);c*=mix(lit,.62,nt)*mix(vec3(1.),vec3(.55,.7,1.25),nt);if(ss>.5)c*=1.-(1.-shw(.004))*.45*clamp(sd.y*2.5+.2,0.,1.);}"
   "else if(tx<2.5){vec2 p=wp.xz;float dp=vc.r+wo,e=.25,fd=1.-smoothstep(25.,90.,d),h0=wv(p),hx=wv(p+vec2(e,0.)),hz=wv(p+vec2(0.,e));vec3 N=normalize(vec3((h0-hx)*2.*fd,1.,(h0-hz)*2.*fd)),V=normalize(ey-wp),L=normalize(sd);float nt=1.-clamp(L.y*4.+.6,0.,1.),fr=pow(1.-max(dot(N,V),0.),4.);"
@@ -132,12 +132,16 @@ static float pn(float x, float z) {
   return (vn(ix,iz)*(1-fx) + vn(ix+1,iz)*fx)*(1-fz) + (vn(ix,iz+1)*(1-fx) + vn(ix+1,iz+1)*fx)*fz;
 }
 static float MS = 1.4f, bioRot = 0.f, WE = 616.f;   // map scale (1 = the original island), biome rotation, half-size of the world
-static float biomeAt(float x, float z) {   // 0 temperate, 1 desert, 2 winter (the sectors rotate with the seed)
-  float r = hypotf(x, z), bn = atan2f(z, x)/6.2832f + .5f + bioRot + (pn(x*.006f, z*.006f) - .5f)*.18f, w = fminf(1.f, fmaxf(0.f, (r - 50.f)/90.f));
+static float biomeAt(float x, float z) {   // 0 temperate, 1 desert, 2 winter; continuous land zones, no artificial radial ring
+  float bn = atan2f(z, x)/6.2832f + .5f + bioRot + (pn(x*.006f, z*.006f) - .5f)*.18f;
   bn -= floorf(bn);
-  float d = fminf(1.f, fmaxf(0.f, (bn - .1f)/.08f))*(1.f - fminf(1.f, fmaxf(0.f, (bn - .34f)/.08f)));
-  float sn = fminf(1.f, fmaxf(0.f, (bn - .58f)/.08f))*(1.f - fminf(1.f, fmaxf(0.f, (bn - .82f)/.08f)));
-  return (d + 2.f*sn)*w;
+  auto sm = [](float a, float b, float x) { float t=fminf(1.f,fmaxf(0.f,(x-a)/(b-a))); return t*t*(3.f-2.f*t); };
+  float d = sm(.07f, .16f, bn) * (1.f - sm(.30f, .39f, bn));
+  float sn = sm(.56f, .63f, bn) * (1.f - sm(.82f, .9f, bn));
+  // Break the old ring look with broad, low-frequency land masks while keeping Seed variation.
+  float land = .72f + .28f*pn(x*.0028f + 17.f, z*.0028f - 9.f);
+  d *= land; sn *= .82f + .18f*pn(x*.0035f - 21.f, z*.0035f + 13.f);
+  return d + 2.f*sn;
 }
 static inline float sst(float a, float b, float x) { float t = fminf(1.f, fmaxf(0.f, (x - a)/(b - a))); return t*t*(3.f - 2.f*t); }
 static inline float rdg(float v) { v = 1.f - fabsf(2.f*v - 1.f); return v*v; }   // ridged noise: sharp crest where the value noise crosses .5
