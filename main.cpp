@@ -1299,23 +1299,40 @@ static void drawPlats(const Frus& f, bool shadow) {
 static const int GCN = 16;
 struct GChunk { int cx, cz; unsigned vbo; int n; signed char lod; float y0, y1; };
 static unordered_map<long long, GChunk*> gcm;
-static void grassBuild(GChunk* g, int lod) {   // lod 0: 4 blades per tuft + flowers, lod 1: 2 blades
-  vb.clear(); int nb = lod == 0 ? 4 : 2;
+static void grassBuild(GChunk* g, int lod) {   // static LOD batches: layered blades close-up, economical crossed tufts farther away
+  vb.clear(); const int nb = lod == 0 ? 3 : 2;
   for (int gx = g->cx*GCN; gx < g->cx*GCN + GCN; gx++) for (int gz = g->cz*GCN; gz < g->cz*GCN + GCN; gz++) {
-    if (vn(gx*3+1, gz*5+2) < .2f) continue;
-    float x = gx + vn(gx, gz), z = gz + vn(gz+7, gx);
-    float sl, h = meshH(x, z, &sl); if (h < 1.5f || sl > .5f || biomeAt(x, z) > .3f || roadCov(x, z)) continue;
-    float kind = vn(gx+5, gz+1), s = .22f + .3f*vn(gx+3, gz+9);
-    float cr = .12f, cg = .3f, cb = .07f, tr = .45f, tg = .66f, tb = .2f;
-    if (kind < .4f) { cr = .22f; cg = .32f; cb = .09f; tr = .72f; tg = .72f; tb = .27f; }
-    else if (kind > .88f) { cr = .25f; cg = .24f; cb = .1f; tr = .62f; tg = .55f; tb = .25f; }
+    float density = vn(gx*3+1, gz*5+2); if (density < (lod == 0 ? .12f : .24f)) continue;
+    float x = gx + .12f + .76f*vn(gx, gz), z = gz + .12f + .76f*vn(gz+7, gx);
+    float sl, h = meshH(x, z, &sl); if (h < 1.5f || sl > .48f || biomeAt(x, z) > .3f || roadCov(x, z)) continue;
+    float patch = vn((int)floorf(x*.22f), (int)floorf(z*.22f)), kind = vn(gx+5, gz+1);
+    float baseH = .24f + .31f*vn(gx+3, gz+9), baseR = .10f + .10f*vn(gx+13, gz+2);
+    float br=.12f, bg=.29f, bb=.065f, tr=.39f, tg=.58f, tb=.16f;
+    if (kind < .28f) { br=.16f; bg=.31f; bb=.055f; tr=.55f; tg=.68f; tb=.19f; }
+    else if (kind > .78f) { br=.19f; bg=.25f; bb=.07f; tr=.43f; tg=.49f; tb=.13f; }
+    // Each blade is a tapered, slightly bent leaf; two crossed orientations give volume without texture overdraw.
     for (int q = 0; q < nb; q++) {
-      float a = q*6.2832f/nb + vn(gx, gz+q)*1.2f, bx = cosf(a)*.04f, bz = sinf(a)*.04f, hh = s*(.7f + .6f*vn(gx+q, gz));
-      tv(x-bx, h, z-bz, cr, cg, cb); tv(x+bx, h, z+bz, cr, cg, cb);
-      tv(x + cosf(a)*.12f*s, h + hh, z + sinf(a)*.12f*s, tr + 2.f, tg, tb);
+      float a = q*3.14159f/nb + vn(gx, gz+q)*3.14159f, dx=cosf(a), dz=sinf(a);
+      float width=baseR*(lod==0?1.f:1.25f), hh=baseH*(.72f+.65f*vn(gx+q, gz+11));
+      float lean=(vn(gx+q*7,gz+5)-.5f)*.32f;
+      float lx=-dz*width, lz=dx*width;
+      tv(x-lx,h,z-lz,br,bg,bb); tv(x+lx,h,z+lz,br,bg,bb);
+      tv(x+dx*lean+lx*.42f,h+hh*.68f,z+dz*lean+lz*.42f,tr,tg,tb);
+      tv(x-lx,h,z-lz,br,bg,bb); tv(x+dx*lean+lx*.42f,h+hh*.68f,z+dz*lean+lz*.42f,tr,tg,tb);
+      tv(x+dx*lean*1.5f,h+hh,z+dz*lean*1.5f,tr*.88f,tg*.94f,tb);
     }
-    float fl = vn(gx+11, gz+3);
-    if (lod == 0 && fl > .93f) { float fr_ = fl > .97f ? .95f : .75f, fg = fl > .965f ? .85f : .6f, fb = fl > .955f ? .3f : .95f; float hy = h + s*1.1f; tv(x-.05f, hy, z, fr_, fg, fb); tv(x+.05f, hy, z, fr_, fg, fb); tv(x, hy + .1f, z, fr_, fg, fb); }
+    // Small wildflower patches: clumped spatial noise, with a few color varieties and a tiny green stem.
+    float flower = vn(gx+11,gz+3), flowerPatch = vn((int)floorf(x*.13f+4),(int)floorf(z*.13f-9));
+    if (flowerPatch > .48f && flower > (lod==0 ? .80f : .90f)) {
+      float fx=x+(vn(gx+23,gz)-.5f)*.34f, fz=z+(vn(gx,gz+23)-.5f)*.34f, fh=h+baseH*.9f;
+      float c=vn(gx+31,gz+17), fr=c<.34f?1.f:c<.68f?.95f:1.f, fg=c<.34f?.78f:c<.68f?.88f:.48f, fb=c<.34f?.2f:1.f;
+      tv(fx-.018f, h, fz, .12f,.28f,.08f); tv(fx+.018f, h, fz, .12f,.28f,.08f); tv(fx, fh*.55f+h*.45f, fz, .18f,.38f,.1f);
+      // two perpendicular petal cards and a warm centre; no separate draw calls
+      float rr=lod==0?.095f:.13f;
+      tv(fx-rr,fh,fz,fr,fg,fb); tv(fx+rr,fh,fz,fr,fg,fb); tv(fx,fh+rr*.22f,fz,1.f,.84f,.28f);
+      tv(fx,fh,fz-rr,fr,fg,fb); tv(fx,fh,fz+rr,fr,fg,fb); tv(fx,fh+rr*.22f,fz,1.f,.84f,.28f);
+    }
+    (void)patch;
   }
   float y0 = 1e9f, y1 = -1e9f; for (size_t i = 0; i < vb.size(); i++) { y0 = fminf(y0, vb[i].y); y1 = fmaxf(y1, vb[i].y); }
   g->n = (int)vb.size(); if (g->n) { if (!g->vbo) g->vbo = bufGet(); bufUp(g->vbo, vb.data(), g->n); } g->y0 = g->n ? y0 : 0.f; g->y1 = g->n ? y1 : 1.f; g->lod = (signed char)lod; vb.clear();
