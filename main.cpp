@@ -1568,7 +1568,7 @@ static void newWorld() {   // (re)generate everything from the menu settings
 #endif
   wready(c.seed, WS.nPlat, WS.roadLen, WS.trailLen);
 }
-static void loop() {
+static extern "C" void loop() {
   emscripten_log(EM_LOG_INFO, "loop called, wInit=%d", wInit);
   double now = emscripten_get_now(); float dt = fminf((float)((now-last)/1000), .05f); last = now;
   double cw, ch; emscripten_get_element_css_size("#canvas", &cw, &ch);
@@ -1619,5 +1619,5 @@ int main() {
   }
   say("Лево: ходьба · Право: камера"); msgT = 6;
   py = meshH(0, 0);
-  emscripten_set_main_loop(loop, 0, 1);
+  emscripten_set_main_loop("loop", loop, 0, 1);
 }
