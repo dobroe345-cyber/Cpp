@@ -1576,7 +1576,9 @@ static void loop() {
   if (nw != W || nh != H) { W = nw; H = nh; emscripten_set_canvas_element_size("#canvas", W, H); }
   if (W < 2 || H < 2) return;
   if (!wInit || gk(12)) { newWorld(); wInit = true; }
-  streamWorld(false); update(dt); render(dt);
+  streamWorld(false); update(dt);
+  emscripten_log(EM_LOG_INFO, "render called, preparing to call render(dt)");
+  render(dt);
 #ifdef PROF
   profFrame();
 #endif
