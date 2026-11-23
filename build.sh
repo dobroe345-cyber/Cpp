@@ -5,7 +5,8 @@
 set -e
 FLAGS="-O3 -flto -std=c++17 -DNDEBUG -fno-rtti \
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sMALLOC=emmalloc \
-  -sFILESYSTEM=0 -sENVIRONMENT=web -sGL_TRACK_ERRORS=0 -sASSERTIONS=0"
+  -sFILESYSTEM=0 -sENVIRONMENT=web -sGL_TRACK_ERRORS=0 -sASSERTIONS=0 \
+  -sEXPORTED_RUNTIME_METHODS=cwrap"
 [ "$1" = "profile" ] && FLAGS="$FLAGS -DPROF"
 em++ main.cpp $FLAGS -o game.js
 ls -l game.js game.wasm
