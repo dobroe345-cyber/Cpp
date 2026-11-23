@@ -1477,6 +1477,8 @@ static void roadTex() {   // keep the 256x256 unit road mask centred on the play
 }
 static void render(float dt) {
   PROF_SCOPE(0);
+  // Debug: log tod and sky values
+  emscripten_log(EM_LOG_INFO, "render: tod=%f, k=%f, dyf=%f, wm=%f", tod, k, dyf, wm);
   float k = fminf(fmaxf(sinf(tod*6.2832f)*2 + .5f, .06f), 1.f), dyf = fminf(fmaxf((k - .06f)/.94f, 0.f), 1.f), wm = fmaxf(0.f, 1.f - fabsf(sinf(tod*6.2832f))*6.f), sky[3] = {.07f + .59f*dyf + .3f*wm, .1f + .7f*dyf + .12f*wm, .2f + .75f*dyf - .05f*wm}, top[3] = {.01f + .19f*dyf, .02f + .4f*dyf, .07f + .78f*dyf};
   glViewport(0, 0, W, H); glClearColor(sky[0]*.7f, sky[1]*.82f, sky[2]*.98f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST); roadTex();
   float a = (float)W/H, f = 1/tanf(.55f), n = .1f, fa = 400.f;
