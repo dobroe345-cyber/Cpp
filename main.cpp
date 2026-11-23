@@ -1458,6 +1458,9 @@ static void drawWorld(const float* A, const float* sky, float lt, float lo) {
   setU(A, sky, lo, 0.f); drawCells(fr, 1, false);                                   // 5. alpha-tested leaves last
   setU(A, sky, lt, 2.f); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); for (size_t i = 0; i < tvis.size(); i++) tcWater(tvis[i]); glDisable(GL_BLEND);   // 6. water
   setU(A, sky, lt, 0.f);
+#ifdef EMSCRIPTEN
+  emscripten_log(EM_LOG_INFO, "Render pass completed, sky color: [%f %f %f]", sky[0], sky[1], sky[2]);
+#endif
   if (mReady && gh.on) { Pc g = {gh.type, gh.x, gh.y, gh.z, gh.yaw, gh.hinge, 0.f, 0.f}; float M[16]; pcMat(M, g); glUniform1f(uGt, gh.ok ? 1.f : 2.f); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); drawModel(g.type, M, false); glDisable(GL_BLEND); glUniform1f(uGt, 0.f); glUniformMatrix4fv(uMm, 1, 0, ID4); }
   glBindBuffer(GL_ARRAY_BUFFER, streamVbo); attribs(); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); txOn = 0;
 }
