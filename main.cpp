@@ -1568,6 +1568,7 @@ static void newWorld() {   // (re)generate everything from the menu settings
   wready(c.seed, WS.nPlat, WS.roadLen, WS.trailLen);
 }
 static void loop() {
+  emscripten_log(EM_LOG_INFO, "loop called, wInit=%d", wInit);
   double now = emscripten_get_now(); float dt = fminf((float)((now-last)/1000), .05f); last = now;
   double cw, ch; emscripten_get_element_css_size("#canvas", &cw, &ch);
   K = fminf((float)emscripten_get_device_pixel_ratio(), 1.5f);
