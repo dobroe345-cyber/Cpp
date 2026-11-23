@@ -1385,6 +1385,7 @@ static void unloadFar() {
 }
 static void streamWorld(bool force) {
   PROF_SCOPE(12);
+  emscripten_log(EM_LOG_INFO, "streamWorld called, cx=%d cz=%d force=%d", (int)floorf(px/NCS), (int)floorf(pz/NCS), force);
   double t0 = emscripten_get_now(); const double BUD = force ? 1e9 : 3.0; auto over = [&]() { return emscripten_get_now() - t0 > BUD; };
   int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS);
   static vector<pair<float, int> > ord;
