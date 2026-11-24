@@ -296,66 +296,7 @@ function hudEl(){return document.getElementById('hud');}   // not a global `hud`
 function fail(m){var g=document.getElementById('wgen');if(g)g.classList.remove('on');var h=hudEl();h.style.color='#ffb4a8';h.style.whiteSpace='pre-wrap';h.textContent=m;}
 window.onerror=function(m){fail('Ошибка: '+m);};
 window.onunhandledrejection=function(e){fail('Ошибка: '+(e.reason&&e.reason.message||e.reason));};
-var Module={canvas:document.getElementById('canvas'),print:console.log,printErr:console.warn,onAbort:function(w){fail('Сбой: '+w);},locateFile:function(name) {
-  return name === 'game.wasm' ? 'game.wasm' : name;
-},myInfo: function(){
-  console.log('[CUSTOM] Game info loaded!');
-  return {modules: ['game.wasm'], entry: 'main', flutterEngine: null, externalDependencies: []};
-}};
-// Fallback: fetch game.wasm as base64 if fetch returns wrong MIME type
-var wasmLoader=function(url,cb){
-  fetch(url).then(function(r){
-    if(r.status===404)return cb(new Error(r.status));
-    var ct=r.headers.get('Content-Type');
-    if(ct==='application/wasm'||r.arrayBuffer)r.arrayBuffer().then(cb);
-    else {
-      var re=/base64,/i;
-      var m=re.exec(ct);
-      if(m){
-        r.text().then(function(txt){
-          var raw=window.atob(txt.substring(m.index+m[0].length));
-          var buf=new Uint8Array(raw.length);
-          for(var i=0;i<raw.length;i++)buf[i]=raw.charCodeAt(i);
-          cb(null,buf);
-        });
-      }else r.arrayBuffer().then(cb);
-    }
-  },function(e){
-    var re=/base64,/i;
-    var txt="loading "+url+" failed: "+e+"\nTrying as base64...";
-    var xhr=new XMLHttpRequest();
-    xhr.open('GET',url,true);
-    xhr.responseType='text';
-    xhr.onload=function(){
-      if(xhr.status===200){
-        var m=re.exec(xhr.responseText);
-        if(m){
-          var raw=window.atob(xhr.responseText.substring(m.index+m[0].length));
-          var buf=new Uint8Array(raw.length);
-          for(var i=0;i<raw.length;i++)buf[i]=raw.charCodeAt(i);
-          cb(null,buf);
-          return;
-        }
-      }
-      cb(xhr.status===0?new Error('network error'):new Error('Error loading file: '+xhr.status));
-    };
-    xhr.onerror=function(){cb(new Error('network error'));};
-    xhr.send();
-  });
-};
-Module.instantiateWasm=function(imports,success){
-  wasmLoader(game.wasm,function(err,buf){
-    if(err) {
-      Module.printErr(err);
-      return;
-    }
-    WebAssembly.instantiate(buf,imports).then(function(results){
-      success(results.instance);
-    });
-  });
-};
-// Fix: 'game' is not defined
-if(typeof game==='undefined')var game='game.wasm';
+var Module={canvas:document.getElementById('canvas'),print:console.log,printErr:console.warn,onAbort:function(w){fail('Сбой: '+w);}};
 setTimeout(function(){if(hudEl().textContent.indexOf('Загрузка')===0)fail('Игра не запустилась за 10 секунд.\nПроверьте Settings → Pages → Source: GitHub Actions и вкладку Actions.');},10000);
 </script>
 <script src="game.js" onerror="fail('Файл game.js не найден.\nSettings → Pages → Source → GitHub Actions, затем запустите Deploy во вкладке Actions.')"></script>

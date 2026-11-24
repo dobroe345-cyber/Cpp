@@ -1,0 +1,51 @@
+name: CI test build (temporary)
+# Temporary diagnostic workflow: builds main.cpp two ways and publishes the result to the branches ci-out-a / ci-out-b
+# so that the game can be started and checked in a headless browser. Not used for the live site.
+on:
+  push:
+    branches: [fix-loading]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: a
+            ver: 3.1.58
+          - key: b
+            ver: latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ matrix.ver }}
+      - name: Build
+        shell: bash
+        run: |
+          mkdir -p out
+          em++ --version | head -1 | tee out/version.txt
+          set +e
+          if [ "${{ matrix.key }}" = "a" ]; then
+            bash build.sh > out/build.log 2>&1
+          else
+            em++ main.cpp -O2 -std=c++17 -lGL -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_RUNTIME_METHODS=UTF8ToString -o game.js > out/build.log 2>&1
+          fi
+          echo "exit=$?" >> out/build.log
+          set -e
+          cp game.js game.wasm out/ || true
+          tail -n 30 out/build.log
+      - name: Publish build to branch ci-out-${{ matrix.key }}
+        if: always()
+        shell: bash
+        run: |
+          cd out
+          git init -q
+          git checkout -q -b tmp
+          git config user.name ci
+          git config user.email ci@example.invalid
+          git add -A
+          git commit -qm "build ${{ matrix.key }} of ${{ github.sha }}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" tmp:refs/heads/ci-out-${{ matrix.key }}

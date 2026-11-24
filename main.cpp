@@ -1385,7 +1385,6 @@ static void unloadFar() {
 }
 static void streamWorld(bool force) {
   PROF_SCOPE(12);
-  emscripten_log(EM_LOG_INFO, "streamWorld called, cx=%d cz=%d force=%d", (int)floorf(px/NCS), (int)floorf(pz/NCS), force);
   double t0 = emscripten_get_now(); const double BUD = force ? 1e9 : 3.0; auto over = [&]() { return emscripten_get_now() - t0 > BUD; };
   int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS);
   static vector<pair<float, int> > ord;
@@ -1459,9 +1458,6 @@ static void drawWorld(const float* A, const float* sky, float lt, float lo) {
   setU(A, sky, lo, 0.f); drawCells(fr, 1, false);                                   // 5. alpha-tested leaves last
   setU(A, sky, lt, 2.f); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); for (size_t i = 0; i < tvis.size(); i++) tcWater(tvis[i]); glDisable(GL_BLEND);   // 6. water
   setU(A, sky, lt, 0.f);
-#ifdef EMSCRIPTEN
-  emscripten_log(EM_LOG_INFO, "Render pass completed, sky color: [%f %f %f]", sky[0], sky[1], sky[2]);
-#endif
   if (mReady && gh.on) { Pc g = {gh.type, gh.x, gh.y, gh.z, gh.yaw, gh.hinge, 0.f, 0.f}; float M[16]; pcMat(M, g); glUniform1f(uGt, gh.ok ? 1.f : 2.f); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); drawModel(g.type, M, false); glDisable(GL_BLEND); glUniform1f(uGt, 0.f); glUniformMatrix4fv(uMm, 1, 0, ID4); }
   glBindBuffer(GL_ARRAY_BUFFER, streamVbo); attribs(); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); txOn = 0;
 }
@@ -1479,8 +1475,6 @@ static void roadTex() {   // keep the 256x256 unit road mask centred on the play
 static void render(float dt) {
   PROF_SCOPE(0);
   float k = fminf(fmaxf(sinf(tod*6.2832f)*2 + .5f, .06f), 1.f), dyf = fminf(fmaxf((k - .06f)/.94f, 0.f), 1.f), wm = fmaxf(0.f, 1.f - fabsf(sinf(tod*6.2832f))*6.f), sky[3] = {.07f + .59f*dyf + .3f*wm, .1f + .7f*dyf + .12f*wm, .2f + .75f*dyf - .05f*wm}, top[3] = {.01f + .19f*dyf, .02f + .4f*dyf, .07f + .78f*dyf};
-  // Debug: log tod and sky values
-  emscripten_log(EM_LOG_INFO, "render: tod=%f, k=%f, dyf=%f, wm=%f", tod, k, dyf, wm);
   glViewport(0, 0, W, H); glClearColor(sky[0]*.7f, sky[1]*.82f, sky[2]*.98f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST); roadTex();
   float a = (float)W/H, f = 1/tanf(.55f), n = .1f, fa = 400.f;
   float P[16] = {f/a,0,0,0, 0,f,0,0, 0,0,(fa+n)/(n-fa),-1, 0,0,2*fa*n/(n-fa),0};
@@ -1568,8 +1562,7 @@ static void newWorld() {   // (re)generate everything from the menu settings
 #endif
   wready(c.seed, WS.nPlat, WS.roadLen, WS.trailLen);
 }
-static extern "C" void loop() {
-  emscripten_log(EM_LOG_INFO, "loop called, wInit=%d", wInit);
+static void loop() {
   double now = emscripten_get_now(); float dt = fminf((float)((now-last)/1000), .05f); last = now;
   double cw, ch; emscripten_get_element_css_size("#canvas", &cw, &ch);
   K = fminf((float)emscripten_get_device_pixel_ratio(), 1.5f);
@@ -1577,9 +1570,7 @@ static extern "C" void loop() {
   if (nw != W || nh != H) { W = nw; H = nh; emscripten_set_canvas_element_size("#canvas", W, H); }
   if (W < 2 || H < 2) return;
   if (!wInit || gk(12)) { newWorld(); wInit = true; }
-  streamWorld(false); update(dt);
-  emscripten_log(EM_LOG_INFO, "render called, preparing to call render(dt)");
-  render(dt);
+  streamWorld(false); update(dt); render(dt);
 #ifdef PROF
   profFrame();
 #endif
@@ -1619,5 +1610,5 @@ int main() {
   }
   say("Лево: ходьба · Право: камера"); msgT = 6;
   py = meshH(0, 0);
-  emscripten_set_main_loop("loop", loop, 0, 1);
+  emscripten_set_main_loop(loop, 0, 1);
 }
