@@ -1,14 +1,18 @@
 name: Deploy to GitHub Pages
+# 1. builds main.cpp with the SAME flags as build.sh and the SAME emsdk version it was tested with
+# 2. starts the built game in headless Chrome (tools/smoke_test.py); a game that does not load is never published
+# 3. keeps game.js / game.wasm in the repository root up to date (so Pages also works with "Deploy from a branch")
+# 4. publishes index.html + game.js + game.wasm + icons/models/sounds to GitHub Pages
 on:
   push:
-    branches: [main]
+    branches: [main, fix-loading]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   build:
@@ -16,19 +20,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: mymindstorm/setup-emsdk@v14
-      - name: Compile C++ to WebAssembly
+        with:
+          version: 3.1.58
+      - name: Compile C++ to WebAssembly (flags are in build.sh)
+        run: bash build.sh
+      - name: Assemble the site
         run: |
           mkdir dist
-          em++ main.cpp -O2 -std=c++17 -lGL -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_RUNTIME_METHODS=UTF8ToString -o dist/game.js
-          cp index.html dist/
-          cp -r icons dist/ 2>/dev/null || true
-          cp -r models dist/ 2>/dev/null || true
-          cp -r sounds dist/ 2>/dev/null || true
+          cp index.html game.js game.wasm dist/
+          for d in icons models sounds; do
+            if [ -d "$d" ]; then cp -r "$d" dist/; fi
+          done
+          touch dist/.nojekyll
+      - name: Smoke test (the game must really start)
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet playwright
+          .venv/bin/python tools/smoke_test.py dist smoke.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-screenshot
+          path: smoke.png
+          if-no-files-found: ignore
+      - name: Keep game.js / game.wasm in the repository root up to date
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        run: |
+          if [ -n "$(git status --porcelain -- game.js game.wasm)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add game.js game.wasm
+            git commit -m "Rebuild game.js and game.wasm from main.cpp [skip ci]"
+            git push
+          fi
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
   deploy:
     needs: build
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
