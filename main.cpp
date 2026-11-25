@@ -802,6 +802,7 @@ static const Sp SPC[NSP] = {
   {"bush_tall_01", 1.f, 1}, {"bush_wide_01", 1.4f, 1}, {"bush_hedge_01", 1.5f, 1}, {"bush_dry_01", 1.f, 1},
   {"cactus_saguaro_01", .55f, 3}, {"cactus_saguaro_02", .6f, 3}, {"cactus_barrel_01", .55f, 2}, {"cactus_pear_01", .5f, 2}};
 static void trLoadStep();   // uploads the plant models, defined with the plant runtime further down
+static void streamWorld(bool force);   // defined with the streaming code further down
 struct Cell { unsigned vbo[2]; int n[2]; float y0, y1; signed char band; bool dirty, built; };   // one 32x32 static batch: [0] opaque, [1] alpha-tested
 struct NChunk { int cx, cz, n, dead; bool mod; vector<float> x, z, y, t, sc, rt, sn; vector<int> type, hp;   // sc / rt / sn: scale, yaw and snow amount of a plant
     vector<signed char> cell; Cell c[4]; };
