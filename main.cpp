@@ -78,6 +78,8 @@ EM_JS(void, trI, (int s, int lod, int part, unsigned short* dst), { HEAPU16.set(
 EM_JS(float, trB, (int s, int k), { var m = window.TR && window.TR[window.TRNAMES[s]]; return m ? m.bb[k] : 0; });
 EM_JS(int, trSlot, (int s, int k), { var m = window.TR && window.TR[window.TRNAMES[s]]; return m && k < m.slots.length ? m.slots[k] : -1; });
 EM_JS(int, trTexUp, (int id, int gi), { var t = window.TRT && window.TRT[gi]; if (!t || !t.d) return 0; var g = GLctx; g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, GL.textures[id]); g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL, false); g.pixelStorei(g.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, t.w, t.h, 0, g.RGBA, g.UNSIGNED_BYTE, t.d); g.generateMipmap(g.TEXTURE_2D); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR_MIPMAP_LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.REPEAT); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.REPEAT); return 1; });
+EM_JS(int, tpGet, (float* o), { var t = window.TP; if (!t) return 0; window.TP = null; for (var i = 0; i < 6; i++) HEAPF32[(o >> 2) + i] = +t[i] || 0; return 1; });   // test hook: window.TP = [x, z, yaw, pitch] teleports the player
+EM_JS(void, tpInfo, (float x, float z, float h, float b), { window.TPI = [x, z, h, b]; });
 EM_JS(void, aud, (int sf, int sp, int bu, float td, int jm), { if (window.audioState) window.audioState(sf, sp, bu, td, jm); });
 EM_JS(void, hud, (const char* s), { if (window.hudUpdate) window.hudUpdate(UTF8ToString(s)); });
 EM_JS(double, wcf, (int i, double d), { return window.WC && window.WC.length > i ? +window.WC[i] : d; });   // world settings from the menu
@@ -958,6 +960,11 @@ static EM_BOOL tc(int type, const EmscriptenTouchEvent* e, void*) {
 }
 static void update(float dt) {
   PROF_SCOPE(1);
+  { float t[6]; if (tpGet(t)) {   // [x, z, yaw, pitch] = go there | [bioMin, bioMax, hMin, yaw, 1, pitch] = go to the first spot with a good stand of plants in that biome range
+      if (t[4] > .5f) { bool hit = false; for (float r = 40.f; r < WE*.9f && !hit; r += 14.f) for (float a = 0.f; a < 6.28f && !hit; a += .09f) { float x = r*cosf(a), z = r*sinf(a), h = hgt(x, z), b = biomeAt(x, z);
+          if (b >= t[0] && b <= t[1] && h >= t[2] && h < 40.f && !blockedAt(x, z) && pn(x*.018f + 31.f, z*.018f - 17.f) > .6f && pn(x*.055f - 8.f, z*.055f + 12.f) < .6f) { t[0] = x; t[1] = z; t[2] = t[3]; t[3] = t[5]; hit = true; } }
+        if (!hit) { t[0] = px; t[1] = pz; t[2] = yaw; t[3] = pitch; } }
+      px = t[0]; pz = t[1]; yaw = t[2]; pitch = t[3]; streamWorld(true); py = meshH(px, pz); vy = 0; tpInfo(px, pz, py, biomeAt(px, pz)); } }
   static bool mld = false; if (!mld && gk(11)) { loadModels(); mld = true; } doorStep(dt); trLoadStep();
   inBush = false; tod += dt/240; if (tod > 1) tod -= 1; cd -= dt; msgT -= dt;
   food -= dt*.4f; thirst = fmaxf(0.f, thirst - dt*.55f);
