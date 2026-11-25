@@ -30,6 +30,9 @@ url = 'http://127.0.0.1:%d/index.html' % server.server_address[1]
 
 errors, dialogs, console_errors = [], [], []
 state = {}
+tree_dir = os.path.join(root, 'models', 'tree_assets')
+want_trees = os.path.isdir(tree_dir) and any(f.endswith('.glb') for f in os.listdir(tree_dir))   # plant models shipped -> they must load too
+trees = {}
 with sync_playwright() as p:
     chrome = '/usr/bin/google-chrome'
     browser = p.chromium.launch(
@@ -50,6 +53,16 @@ with sync_playwright() as p:
             state = {'hud': 'evaluate failed: %s' % e, 'world': ''}
         if state['world'].startswith('Сид') or errors or dialogs:
             break
+    if want_trees and not errors and not dialogs:   # the plant models are parsed after the building models: wait for them, then give the GPU upload a few frames
+        while time.time() - t0 < LIMIT:
+            try:
+                trees = page.evaluate("({rdy: window.TRDY | 0, n: Object.keys(window.TR || {}).length})")
+            except Exception as e:
+                trees = {'rdy': 0, 'n': 0}
+            if trees['rdy'] or errors or dialogs:
+                break
+            time.sleep(0.5)
+        time.sleep(8)
     time.sleep(1.5)   # let a few frames render before the screenshot
     page.screenshot(path=shot)
     browser.close()
@@ -59,10 +72,12 @@ if not state.get('world', '').startswith('Сид'):
     problems.append('the world was not generated within %d s (game stuck on loading)' % LIMIT)
 if any(state.get('hud', '').startswith(b) for b in BAD_HUD):
     problems.append('HUD shows an error: %r' % state['hud'])
+if want_trees and (not trees.get('rdy') or trees.get('n', 0) < 1):
+    problems.append('the plant models (models/tree_assets) were not loaded: %r' % trees)
 problems += ['JavaScript error: %s' % e for e in errors]
 problems += ['alert shown (shader error?): %s' % d for d in dialogs]
 
-print('state:', state)
+print('state:', state, 'plants:', trees)
 if console_errors:
     print('console errors (informational, e.g. a missing .glb model):', sorted(set(console_errors))[:5])
 if problems:

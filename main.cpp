@@ -965,7 +965,7 @@ static void update(float dt) {
   PROF_SCOPE(1);
   { float t[8]; if (tpGet(t)) {   // [x, z, yaw, pitch] = go there | [bioMin, bioMax, hMin, yaw, 1, pitch] = go to the first spot with a good stand of plants in that biome range
       if (t[4] > .5f) { bool hit = false; for (float r = 40.f; r < WE*.9f && !hit; r += 14.f) for (float a = 0.f; a < 6.28f && !hit; a += .09f) { float x = r*cosf(a), z = r*sinf(a), h = hgt(x, z), b = biomeAt(x, z);
-          if (b >= t[0] && b <= t[1] && h >= t[2] && h < (t[6] > 0.f ? t[6] : 25.f) && fabsf(hgt(x + 3.f, z) - h) < .6f && fabsf(hgt(x, z + 3.f) - h) < .6f && fabsf(hgt(x - 3.f, z) - h) < .6f && fabsf(hgt(x, z - 3.f) - h) < .6f && !blockedAt(x, z) && pn(x*.018f + 31.f, z*.018f - 17.f) > .6f && pn(x*.055f - 8.f, z*.055f + 12.f) < .6f) { t[0] = x; t[1] = z; t[2] = t[3]; t[3] = t[5]; hit = true; } }
+          if (b >= t[0] && b <= t[1] && h >= t[2] && h < (t[6] > 0.f ? t[6] : 25.f) && fabsf(hgt(x + 3.f, z) - h) < .6f && fabsf(hgt(x, z + 3.f) - h) < .6f && fabsf(hgt(x - 3.f, z) - h) < .6f && fabsf(hgt(x, z - 3.f) - h) < .6f && !blockedAt(x, z) && (t[6] > 0.f || (pn(x*.018f + 31.f, z*.018f - 17.f) > .6f && pn(x*.055f - 8.f, z*.055f + 12.f) < .6f))) { t[0] = x; t[1] = z; t[2] = t[3]; t[3] = t[5]; hit = true; } }
         if (!hit) { t[0] = px; t[1] = pz; t[2] = yaw; t[3] = pitch; } }
       px = t[0]; pz = t[1]; yaw = t[2]; pitch = t[3]; streamWorld(true); py = meshH(px, pz); vy = 0; tpInfo(px, pz, py, biomeAt(px, pz));
       { static int hist[48]; memset(hist, 0, sizeof hist); int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS);
@@ -1284,7 +1284,7 @@ static void trLoadStep() {   // runs every frame until everything is uploaded: t
 static void trDraw(const Frus& f, bool shadow) {   // all plants near the player: culled, sorted into (species, detail level) lists, one instanced draw call per list and part
   if (trStage < 1) return;
   for (int s = 0; s < NSP; s++) for (int l = 0; l < 3; l++) tinst[s][l].clear();
-  const float D0 = shadow ? 100.f : 196.f, D1 = shadow ? 1024.f : 2025.f, DF = shadow ? 8100.f : 12544.f;   // squared distances: full detail | medium | draw limit
+  const float D0 = shadow ? 144.f : 324.f, D1 = shadow ? 1156.f : 3025.f, DF = shadow ? 8100.f : 12544.f;   // squared distances: full detail | medium | draw limit
   int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS); bool any = false;
   for (int j = cz - 2; j <= cz + 2; j++) for (int i = cx - 2; i <= cx + 2; i++) {
     NChunk* c = ncFind(i, j); if (!c) continue;
