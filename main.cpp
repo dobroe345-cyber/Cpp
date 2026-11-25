@@ -78,8 +78,9 @@ EM_JS(void, trI, (int s, int lod, int part, unsigned short* dst), { HEAPU16.set(
 EM_JS(float, trB, (int s, int k), { var m = window.TR && window.TR[window.TRNAMES[s]]; return m ? m.bb[k] : 0; });
 EM_JS(int, trSlot, (int s, int k), { var m = window.TR && window.TR[window.TRNAMES[s]]; return m && k < m.slots.length ? m.slots[k] : -1; });
 EM_JS(int, trTexUp, (int id, int gi), { var t = window.TRT && window.TRT[gi]; if (!t || !t.d) return 0; var g = GLctx; g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, GL.textures[id]); g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL, false); g.pixelStorei(g.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, t.w, t.h, 0, g.RGBA, g.UNSIGNED_BYTE, t.d); g.generateMipmap(g.TEXTURE_2D); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR_MIPMAP_LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.REPEAT); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.REPEAT); return 1; });
-EM_JS(int, tpGet, (float* o), { var t = window.TP; if (!t) return 0; window.TP = null; for (var i = 0; i < 6; i++) HEAPF32[(o >> 2) + i] = +t[i] || 0; return 1; });   // test hook: window.TP = [x, z, yaw, pitch] teleports the player
+EM_JS(int, tpGet, (float* o), { var t = window.TP; if (!t) return 0; window.TP = null; for (var i = 0; i < 8; i++) HEAPF32[(o >> 2) + i] = +t[i] || 0; return 1; });   // test hook: window.TP = [x, z, yaw, pitch] teleports the player
 EM_JS(void, tpHist, (int* a, int n), { window.TPH = Array.from(HEAP32.subarray(a >> 2, (a >> 2) + n)); });
+EM_JS(void, trStat, (int tris, int inst), { window.TRS = [tris, inst]; });
 EM_JS(void, tpInfo, (float x, float z, float h, float b), { window.TPI = [x, z, h, b]; });
 EM_JS(void, aud, (int sf, int sp, int bu, float td, int jm), { if (window.audioState) window.audioState(sf, sp, bu, td, jm); });
 EM_JS(void, hud, (const char* s), { if (window.hudUpdate) window.hudUpdate(UTF8ToString(s)); });
@@ -962,9 +963,9 @@ static EM_BOOL tc(int type, const EmscriptenTouchEvent* e, void*) {
 }
 static void update(float dt) {
   PROF_SCOPE(1);
-  { float t[6]; if (tpGet(t)) {   // [x, z, yaw, pitch] = go there | [bioMin, bioMax, hMin, yaw, 1, pitch] = go to the first spot with a good stand of plants in that biome range
+  { float t[8]; if (tpGet(t)) {   // [x, z, yaw, pitch] = go there | [bioMin, bioMax, hMin, yaw, 1, pitch] = go to the first spot with a good stand of plants in that biome range
       if (t[4] > .5f) { bool hit = false; for (float r = 40.f; r < WE*.9f && !hit; r += 14.f) for (float a = 0.f; a < 6.28f && !hit; a += .09f) { float x = r*cosf(a), z = r*sinf(a), h = hgt(x, z), b = biomeAt(x, z);
-          if (b >= t[0] && b <= t[1] && h >= t[2] && h < 25.f && fabsf(hgt(x + 3.f, z) - h) < .6f && fabsf(hgt(x, z + 3.f) - h) < .6f && fabsf(hgt(x - 3.f, z) - h) < .6f && fabsf(hgt(x, z - 3.f) - h) < .6f && !blockedAt(x, z) && pn(x*.018f + 31.f, z*.018f - 17.f) > .6f && pn(x*.055f - 8.f, z*.055f + 12.f) < .6f) { t[0] = x; t[1] = z; t[2] = t[3]; t[3] = t[5]; hit = true; } }
+          if (b >= t[0] && b <= t[1] && h >= t[2] && h < (t[6] > 0.f ? t[6] : 25.f) && fabsf(hgt(x + 3.f, z) - h) < .6f && fabsf(hgt(x, z + 3.f) - h) < .6f && fabsf(hgt(x - 3.f, z) - h) < .6f && fabsf(hgt(x, z - 3.f) - h) < .6f && !blockedAt(x, z) && pn(x*.018f + 31.f, z*.018f - 17.f) > .6f && pn(x*.055f - 8.f, z*.055f + 12.f) < .6f) { t[0] = x; t[1] = z; t[2] = t[3]; t[3] = t[5]; hit = true; } }
         if (!hit) { t[0] = px; t[1] = pz; t[2] = yaw; t[3] = pitch; } }
       px = t[0]; pz = t[1]; yaw = t[2]; pitch = t[3]; streamWorld(true); py = meshH(px, pz); vy = 0; tpInfo(px, pz, py, biomeAt(px, pz));
       { static int hist[48]; memset(hist, 0, sizeof hist); int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS);
@@ -1060,20 +1061,21 @@ static void collectTerrain() {   // blocks that cover the old 105 unit window an
   for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) { TChunk* c = tcGet(i, j); if (inFrus(fr, i*80.f, c->y0 - .5f, j*80.f, i*80.f + 80.f, c->y1 + .5f, j*80.f + 80.f)) tvis.push_back(c); }
 }
 // ---- world nodes: generation (deterministic per chunk) ----
-// Which plant (or rock) grows at a spot. Every model only grows where the terrain shader paints its own ground (grass .. bio .4, sand .55 .. 1.25, snow 1.45 ..),
-// nothing grows on the beach (low ground), and the cacti need a good margin of height above the sand strip. -1 = nothing here.
+// Which plant (or rock) grows at a spot. Every model only grows where the terrain shader paints its own ground: grass (bio < .35), sand (.65 .. 1.2),
+// snow (>= 1.6); in the colour ramps between them only dry bushes and rocks. Nothing grows on the beach (low ground), and the cacti need a good margin of
+// height above the sand strip. -1 = nothing here.
 static int plantPick(float bio, float h, float stand, float q) {
-  if (bio < .4f) {   // grass: oak, birch, bushes; conifers only up in the hills
+  if (bio < .35f) {   // grass: oak, birch, bushes; conifers only up in the hills
     if (h < 2.8f) return -1;
     if (h > 18.f) return q < .34f ? P_SPRS : q < .58f ? P_SPRM : q < .70f ? P_BIRCHS : q < .82f ? P_OAK3 : P_BUSHH;
     if (stand > .72f) return q < .2f ? P_OAK1 : q < .31f ? P_OAK2 : q < .43f ? P_OAK3 : q < .53f ? P_BIRCHS : q < .64f ? P_BIRCHT1 : q < .74f ? P_BIRCHT2 : q < .82f ? P_BUSHT : q < .91f ? P_BUSHW : P_BUSHH;
     return q < .14f ? P_OAK1 : q < .22f ? P_OAK2 : q < .33f ? P_OAK3 : q < .43f ? P_BIRCHS : q < .52f ? P_BIRCHT1 : q < .6f ? P_BIRCHT2 : q < .72f ? P_BUSHT : q < .86f ? P_BUSHW : P_BUSHH;
   }
-  if (bio < 1.45f) {   // sand: cacti, dry bushes, rocks
+  if (bio < 1.6f) {   // sand: cacti, dry bushes, rocks
     if (h < 3.4f) return -1;
-    if (bio < .55f) return q < .4f ? P_BUSHD : -1;   // thin edge between the grass and the sand
-    if (bio < 1.25f) return q < .2f ? P_SAG1 : q < .4f ? P_SAG2 : q < .62f ? P_BARREL : q < .8f ? P_PEAR : q < .92f ? P_BUSHD : 1;
-    return q < .3f ? P_BUSHD : q < .4f ? 1 : -1;     // towards the snow: no cacti any more
+    if (bio < .65f) return q < .4f ? P_BUSHD : -1;   // edge between the grass and the sand
+    if (bio < 1.2f) return q < .2f ? P_SAG1 : q < .4f ? P_SAG2 : q < .62f ? P_BARREL : q < .8f ? P_PEAR : q < .92f ? P_BUSHD : 1;
+    return q < .3f ? P_BUSHD : q < .4f ? 1 : -1;     // towards the snow: no cacti any more, no trees yet
   }
   if (h < 2.8f) return -1;   // snow: spruce, a few birches, dry bushes, rocks
   return q < .2f ? P_SPRS : q < .46f ? P_SPRM : q < .68f ? P_SPRT : q < .76f ? P_BIRCHS : q < .84f ? P_BIRCHT1 : q < .93f ? P_BUSHD : 1;
@@ -1093,7 +1095,7 @@ static void ncGen(int cx, int cz) {
     float chance = .18f + .68f*stand; if (clearing > .72f) chance *= .16f;
     if (r > chance) continue;
     int ty = plantPick(bio, h, stand, vn(cx*53 + i*17, cz*31 + i*5)); if (ty < 0) continue;
-    bool pl = ty >= 20; float q2 = vn(cx*7 + i*19, cz*61 + i*3), sc = pl ? .78f + .4f*q2 : 1.f, rot = vn(cx*3 + i*23, cz*5 + i*11)*6.2832f, snow = pl ? sst(1.3f, 1.8f, bio) : 0.f;
+    bool pl = ty >= 20; float q2 = vn(cx*7 + i*19, cz*61 + i*3), sc = pl ? .78f + .4f*q2 : 1.f, rot = vn(cx*3 + i*23, cz*5 + i*11)*6.2832f, snow = pl ? sst(1.35f, 1.7f, bio) : 0.f;
     float rad = pl ? fminf(1.2f, fmaxf(.5f, SPC[ty - 20].rad*sc)) : 1.7f;
     float yy = fminf(h, fminf(fminf(meshH(x + rad, z), meshH(x - rad, z)), fminf(meshH(x, z + rad), meshH(x, z - rad))));   // sink into slopes, never float
     c->x.push_back(x); c->z.push_back(z); c->y.push_back(yy); c->t.push_back(0.f); c->sc.push_back(sc); c->rt.push_back(rot); c->sn.push_back(snow); c->type.push_back(ty); c->hp.push_back(nodeHp(ty));
@@ -1297,11 +1299,12 @@ static void trDraw(const Frus& f, bool shadow) {   // all plants near the player
     }
   }
   if (!any) return;
-  GLint ui = shadow ? uShInst : uInst, um = shadow ? uShMm : uMm;
+  GLint ui = shadow ? uShInst : uInst, um = shadow ? uShMm : uMm; int tris = 0, insts = 0;
   for (int part = 0; part < 2; part++) for (int s = 0; s < NSP; s++) {   // opaque trunks first, then the alpha-tested leaves
     const TrSp& t = TS[s]; if (!t.ok || (tinst[s][0].empty() && tinst[s][1].empty() && tinst[s][2].empty())) continue;
     bool bound = false;
     for (int l = 0; l < 3; l++) { int n = (int)tinst[s][l].size()/16; const TrPart& q = t.p[l][part]; if (!n || !q.n) continue;
+      tris += n*q.n/3; if (part == 0) insts += n;
       if (!bound) { for (int k = 0; k < 4; k++) { glActiveTexture(GL_TEXTURE2 + k); glBindTexture(GL_TEXTURE_2D, t.tex[k]); } glActiveTexture(GL_TEXTURE0); bound = true; }
       glBindBuffer(GL_ARRAY_BUFFER, q.vbo); attribs(); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, q.ibo);
       if (instOk) {
@@ -1313,6 +1316,7 @@ static void trDraw(const Frus& f, bool shadow) {   // all plants near the player
     }
   }
   restoreModelTex(); glUniformMatrix4fv(um, 1, 0, ID4); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); glBindBuffer(GL_ARRAY_BUFFER, streamVbo); attribs();
+  static int fcnt = 0; if (!shadow && (++fcnt & 15) == 0) trStat(tris, insts);   // for the test page: what the plants cost this frame
 }
 // ---- streaming: everything near the player is generated / baked with a small time budget per frame, everything far away is released ----
 static void resetWorldCaches() {

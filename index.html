@@ -317,7 +317,7 @@ function runJobs(done){   // decode every image once, shrink it, keep the raw RG
   function fin(){if(--left===0)done();}
   TT.jobs.forEach(function(j){
     if(j.col){var d=new Uint8Array(16);for(var k=0;k<4;k++){d[k*4]=j.col[0];d[k*4+1]=j.col[1];d[k*4+2]=j.col[2];d[k*4+3]=255;}window.TRT[j.gi]={w:2,h:2,d:d};fin();return;}
-    createImageBitmap(j.blob).then(function(bm){
+    (window.createImageBitmap?createImageBitmap(j.blob):new Promise(function(ok,no){var im=new Image();im.onload=function(){ok(im);};im.onerror=no;im.src=URL.createObjectURL(j.blob);})).then(function(bm){
       var sz=(j.png||j.big)?512:256,cv=document.createElement('canvas');cv.width=cv.height=sz;var g=cv.getContext('2d');g.imageSmoothingQuality='high';g.drawImage(bm,0,0,sz,sz);
       var im=g.getImageData(0,0,sz,sz),d=im.data,k;
       if(j.png){   // transparent texels get the average leaf colour: no dark rim around the leaves after filtering / mip-mapping
