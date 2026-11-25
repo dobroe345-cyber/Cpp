@@ -1,0 +1,6 @@
+shared:INFO: (Emscripten: Running sanity checks)
+main.cpp:967:55: error: use of undeclared identifier 'streamWorld'
+  967 |       px = t[0]; pz = t[1]; yaw = t[2]; pitch = t[3]; streamWorld(true); py = meshH(px, pz); vy = 0; tpInfo(px, pz, py, biomeAt(px, pz)); } }
+      |                                                       ^
+1 error generated.
+em++: error: '/home/runner/work/_temp/0950184f-264c-4d04-8a67-5a8c0515e6ef/emsdk-main/upstream/bin/clang++ -target wasm32-unknown-emscripten -fignore-exceptions -fvisibility=default --sysroot=/home/runner/work/_temp/0950184f-264c-4d04-8a67-5a8c0515e6ef/emsdk-main/upstream/emscripten/cache/sysroot -DEMSCRIPTEN -Xclang -iwithsysroot/include/fakesdl -Xclang -iwithsysroot/include/compat -O3 -flto -std=c++17 -DNDEBUG -fno-rtti main.cpp -c -o /tmp/emscripten_temp_8xo3y1_9/main_0.o' failed (returned 1)
