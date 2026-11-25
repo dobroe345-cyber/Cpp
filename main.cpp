@@ -2,7 +2,7 @@
 // =====================================================================================================
 //  PERFORMANCE NOTES (what the engine does so that a big map stays fast)
 //   * terrain:   5-unit lattice cache (heights / normals / biome, 80x80 unit blocks) -> static indexed meshes, frustum culled
-//   * nodes:     trees / rocks live in 64x64 chunks (hash grid, SoA); 32x32 static batches per detail level (opaque / alpha-tested)
+//   * nodes:     plants (GLB models: trees / bushes / cacti, 3 detail levels, instanced) and rocks live in 64x64 chunks (hash grid, SoA); rocks and pebbles are baked into 32x32 static batches
 //                baked once, rebuilt only when a node is harvested / respawns or the detail level changes; horizon occlusion culling
 //   * grass:     16x16 static batches, the wind runs in the vertex shader
 //   * shadows:   one cached shadow map, redrawn only when the sun moves, the player leaves the middle or a caster changes
@@ -51,7 +51,6 @@ static void profFrame() {
 #define PROF_SCOPE(i)
 #endif
 struct V { float x, y, z, r, g, b; };
-struct Node { float x, z, t; int type, hp; float y; };      // 0 tree, 1 rock, 2 berry bush
 struct Blk { float x, z, w, d; bool wall; float y; };       // building piece
 struct Fin { int id; float x, y, bx, by; };        // finger
 
@@ -70,35 +69,42 @@ EM_JS(void, glbV, (const char* nm, float* dst), { HEAPF32.set(window.GL3[UTF8ToS
 EM_JS(void, glbI, (const char* nm, unsigned short* dst), { HEAPU16.set(window.GL3[UTF8ToString(nm)].i, dst >> 1); });
 EM_JS(int, texUp, (int id, int k), { var im = window.TSLOT && window.TSLOT[k]; if (!im) return 0; var g = GLctx; g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, GL.textures[id]); g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL, false); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, im); if (k == 5) { g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.NEAREST); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.NEAREST); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE); } else { g.generateMipmap(g.TEXTURE_2D); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR_MIPMAP_LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.REPEAT); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.REPEAT); } return 1; });
 EM_JS(float, glbB, (const char* nm, int k), { var m = window.GL3 && window.GL3[UTF8ToString(nm)]; if (!m) return 0; return k < 6 ? m.bb[k] : k == 6 ? m.topw : k == 7 ? m.topd : m.piv[0]; });
+// ---- plant models: parsed / simplified by the loader in index.html (window.TR / TRT / TRNAMES / TRDY), uploaded and drawn further down ----
+EM_JS(int, trReady, (), { return window.TRDY ? 1 : 0; });
+EM_JS(int, trNTex, (), { return window.TRT ? window.TRT.length : 0; });
+EM_JS(int, trN, (int s, int lod, int part, int k), { var m = window.TR && window.TR[window.TRNAMES[s]]; if (!m) return 0; var q = m.lod[lod][part ? 'cut' : 'op']; return k == 0 ? q.v.length/6 : q.i.length; });
+EM_JS(void, trV, (int s, int lod, int part, float* dst), { HEAPF32.set(window.TR[window.TRNAMES[s]].lod[lod][part ? 'cut' : 'op'].v, dst >> 2); });
+EM_JS(void, trI, (int s, int lod, int part, unsigned short* dst), { HEAPU16.set(window.TR[window.TRNAMES[s]].lod[lod][part ? 'cut' : 'op'].i, dst >> 1); });
+EM_JS(float, trB, (int s, int k), { var m = window.TR && window.TR[window.TRNAMES[s]]; return m ? m.bb[k] : 0; });
+EM_JS(int, trSlot, (int s, int k), { var m = window.TR && window.TR[window.TRNAMES[s]]; return m && k < m.slots.length ? m.slots[k] : -1; });
+EM_JS(int, trTexUp, (int id, int gi), { var t = window.TRT && window.TRT[gi]; if (!t || !t.d) return 0; var g = GLctx; g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, GL.textures[id]); g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL, false); g.pixelStorei(g.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, t.w, t.h, 0, g.RGBA, g.UNSIGNED_BYTE, t.d); g.generateMipmap(g.TEXTURE_2D); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR_MIPMAP_LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.REPEAT); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.REPEAT); return 1; });
 EM_JS(void, aud, (int sf, int sp, int bu, float td, int jm), { if (window.audioState) window.audioState(sf, sp, bu, td, jm); });
 EM_JS(void, hud, (const char* s), { if (window.hudUpdate) window.hudUpdate(UTF8ToString(s)); });
 EM_JS(double, wcf, (int i, double d), { return window.WC && window.WC.length > i ? +window.WC[i] : d; });   // world settings from the menu
 EM_JS(void, wready, (double seed, int np, double rk, double tk), { if (window.worldReady) window.worldReady(seed, np, rk, tk); });
 EM_JS(void, mapImg, (const unsigned char* p, int m, float e), { var c = document.createElement('canvas'); c.width = c.height = m; var g = c.getContext('2d'), d = g.createImageData(m, m); d.data.set(HEAPU8.subarray(p, p + m*m*4)); g.putImageData(d, 0, 0); window.mapCanvas = c; window.MAPE = e; });
 
-static const char* VS = "attribute vec3 p;attribute vec3 c;attribute vec4 i0;attribute vec4 i1;attribute vec4 i2;attribute vec4 i3;uniform mat4 m;uniform mat4 lm;uniform mat4 mm;uniform float tx;uniform float tm;uniform float inst;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;"
+static const char* VS = "attribute vec3 p;attribute vec3 c;attribute vec4 i0;attribute vec4 i1;attribute vec4 i2;attribute vec4 i3;uniform mat4 m;uniform mat4 lm;uniform mat4 mm;uniform float tx;uniform float tm;uniform float inst;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;varying float vsn;"
   "void main(){vec3 q=p,cc=c;float o=0.;if(tx>1.5&&tx<2.5){o=.16*sin(tm*.7)+.1*sin(dot(p.xz,vec2(.06,.045))-tm*1.15);q.y+=o;}"
   "else if(tx>7.5&&c.r>1.5){cc.r-=2.;float w=sin(tm*2.+p.x*.7+p.z*.5)*.03;q.x+=w;q.z+=w*.5;}"   // grass tips (red channel +2) sway in the vertex shader
-  "vec4 w4=(inst>.5?mat4(i0,i1,i2,i3):mm)*vec4(q,1.);gl_Position=m*w4;vc=cc;d=gl_Position.w;wp=w4.xyz;ls=lm*w4;wo=o;}";
+  "mat4 M=inst>.5?mat4(i0,i1,i2,i3):mm;vsn=M[0][3];vec4 w4=M*vec4(q,1.);w4.w=1.;gl_Position=m*w4;vc=cc;d=gl_Position.w;wp=w4.xyz;ls=lm*w4;wo=o;}";
 static const char* FS = "#extension GL_OES_standard_derivatives : enable\n"
-  "precision highp float;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;uniform vec3 fog;uniform vec3 sd;uniform vec3 ey;uniform float lit;uniform float tx;uniform float tm;uniform sampler2D sm;uniform float ss;uniform sampler2D t0;uniform sampler2D t1;uniform sampler2D t2;uniform sampler2D t3;uniform sampler2D t4;uniform sampler2D t5;uniform float gt;uniform sampler2D rm;uniform vec3 rmo;"
+  "precision highp float;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;varying float vsn;uniform vec3 fog;uniform vec3 sd;uniform vec3 ey;uniform float lit;uniform float tx;uniform float tm;uniform sampler2D sm;uniform float ss;uniform sampler2D t0;uniform sampler2D t1;uniform sampler2D t2;uniform sampler2D t3;uniform sampler2D t4;uniform sampler2D t5;uniform float gt;uniform sampler2D rm;uniform vec3 rmo;"
   "float h(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}"
   "float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*f*(f*(f*6.-15.)+10.);return mix(mix(h(i),h(i+vec2(1.,0.)),f.x),mix(h(i+vec2(0.,1.)),h(i+vec2(1.,1.)),f.x),f.y);}"
   "float fb(vec2 p){float a=.5,s=0.;for(int i=0;i<5;i++){s+=a*n(p);p=mat2(.8,.6,-.6,.8)*p*2.03+vec2(17.1,9.2);a*=.5;}return s;}"
   "float wv(vec2 p){p=mat2(.8,.6,-.6,.8)*p;float a=n(p*.35+vec2(tm*.25,tm*.15))*.6;p=mat2(.8,.6,-.6,.8)*p*2.1;return a+n(p-vec2(tm*.45,tm*.3))*.28+n(p*2.3+tm*.6)*.12;}"
-  "float lf(vec2 q){vec2 i=floor(q),f=fract(q)-.5;float a=h(i)*6.283;f+=(vec2(h(i+7.),h(i+13.))-.5)*.3;vec2 r=vec2(cos(a)*f.x+sin(a)*f.y,-sin(a)*f.x+cos(a)*f.y);return 1.-step(1.,length(r/vec2(.52,.24)));}float lfm(vec2 u){return max(lf(u*5.),lf(u*6.+3.1))*step(length(u-.5),.5);}"
   "float up(vec4 c){return dot(c,vec4(1.,1./255.,1./65025.,1./16581375.));}"
   "float shw(float bs){vec3 q=ls.xyz/ls.w*.5+.5;if(q.x<0.||q.x>1.||q.y<0.||q.y>1.||q.z>1.)return 1.;float s=(q.z-bs>up(texture2D(sm,q.xy)))?0.:1.;for(int i=0;i<8;i++){float a=float(i)*.785;vec2 o=vec2(cos(a),sin(a))*.0011;s+=(q.z-bs>up(texture2D(sm,q.xy+o)))?0.:1.;}float e=max(abs(q.x-.5),abs(q.y-.5))*2.;return mix(1.,s/9.,1.-smoothstep(.8,1.,e));}"
   "void main(){if(tx>.5&&tx<1.5&&d>=110.){gl_FragColor=vec4(fog,1.);return;}vec3 c=vc;float a=1.;"
-  "if(tx<.5){vec3 al=vc;vec3 N=normalize(cross(dFdx(wp),dFdy(wp)));if(dot(N,ey-wp)<0.)N=-N;bool pc=vc.b>19.5,fo=vc.b>1.5&&!pc,rk=vc.r>5.&&!fo&&!pc;"
-  "if(fo){if(lfm(vc.xy)<.5)discard;float k=vc.b-2.,pl=floor(k+.01),t=(k-pl)/.99;vec3 a0,a1;if(pl<.5){a0=vec3(.07,.2,.05);a1=vec3(.45,.62,.14);}else if(pl<1.5){a0=vec3(.04,.14,.08);a1=vec3(.2,.42,.2);}else if(pl<2.5){a0=vec3(.1,.2,.05);a1=vec3(.38,.52,.14);}else if(pl<3.5){a0=vec3(.03,.11,.08);a1=vec3(.14,.3,.2);}else if(pl<4.5){a0=vec3(.08,.18,.07);a1=vec3(.26,.4,.16);}else{a0=vec3(.3,.26,.1);a1=vec3(.62,.55,.26);}al=mix(a0,a1,t)*(.85+.3*h(floor(vc.xy*5.)));if(pl>2.5&&pl<4.5)al=mix(al,vec3(.93,.96,1.),smoothstep(.15,.65,N.y)*.9);}"
+  "if(tx<.5){vec3 al=vc;vec3 N=normalize(cross(dFdx(wp),dFdy(wp)));if(dot(N,ey-wp)<0.)N=-N;bool pc=vc.b>19.5,lfx=vc.b>29.5,rk=vc.r>5.&&!pc;"
   "if(rk){float m10=floor(vc.r/10.),mt=m10-1.,sn=0.;if(mt>7.5){mt-=8.;sn=1.;}vec3 bs=mt<.5?vec3(.62,.62,.64):(mt<1.5?vec3(.3,.2,.16):(mt<2.5?vec3(.2,.22,.17):(mt<3.5?vec3(.42,.4,.38):(mt<4.5?vec3(.2,.42,.16):(mt<5.5?vec3(.05,.15,.05):(mt<6.5?vec3(.08,.18,.07):vec3(.3,.26,.12)))))));"
   "float st=n(vec2(wp.y*5.+n(wp.xz*1.1)*3.,(wp.x+wp.z)*.35)),gr=n(wp.xz*16.+wp.y*13.),vz=abs(n(wp.xz*2.4+wp.y*2.1)-.5),vein=1.-smoothstep(0.,.05,vz);al=bs*(.7+.45*st)*(.82+.3*gr);"
   "if(mt<.5){al=mix(al,vec3(.35,.36,.4),vein*.7);al=mix(al,vec3(.9,.9,.92),smoothstep(.72,.8,n(wp.xz*9.+wp.y*8.))*.5);al=mix(al,vec3(.2,.36,.12),smoothstep(.62,.9,N.y)*smoothstep(.5,.7,n(wp.xz*5.))*.4*(1.-sn));}else if(mt<1.5){al=mix(al,vec3(.12,.07,.06),vein*.7);al=mix(al,vec3(.8,.4,.14),smoothstep(.66,.72,n(wp.xz*10.+wp.y*9.))*.85);}else if(mt<2.5){al=mix(al,vec3(.88,.82,.16),vein*.95);al=mix(al,vec3(.8,.78,.2),smoothstep(.7,.76,n(wp.xz*8.+wp.y*7.))*.6);}else if(mt>3.5&&mt<4.5){al*=.78+.3*abs(sin(vc.g*50.27))+.15*h(floor(wp.xz*11.+wp.y*7.));}"
   "if(mt>5.5&&mt<6.5)sn=1.;if(sn>.5)al=mix(al,vec3(.93,.96,1.),smoothstep(.3,.7,N.y)*.92);}"
-  "if(pc){float id=floor(vc.b-19.5);vec2 tc=vc.rg;al=id<.5?texture2D(t0,tc).rgb:(id<1.5?texture2D(t1,tc).rgb:(id<2.5?texture2D(t2,tc).rgb:(id<3.5?texture2D(t3,tc).rgb:(id<4.5?texture2D(t4,tc).rgb:texture2D(t5,tc).rgb))));}"
-  "vec3 L=normalize(sd);float dl=dot(N,L),dif=fo?(max(dl,0.)+.25*max(-dl,0.)):max(dl,0.),hm=.5+.5*N.y,si=clamp(L.y*2.5+.2,0.,1.),nt=1.-clamp(L.y*4.+.6,0.,1.);"
-  "float g=n(wp.xz*5.+wp.y*3.)*.55+n(wp.xz*19.+wp.y*11.)*.45;c=al*(fo?.8+.3*g:((rk||pc)?1.:.72+.56*g));float sh=1.;if(ss>.5)sh=shw(.0012+.004*(1.-dif));c*=(.22+.3*hm)*mix(vec3(.9,.95,1.1),vec3(.5,.65,1.25),nt)*mix(lit,.62,nt)+si*dif*sh*vec3(.95,.88,.72)+vec3(.45,.55,.95)*.5*max(-dl,0.)*nt;if(gt>.5){vec3 gc=gt<1.5?vec3(.22,.6,1.):vec3(1.,.25,.2);c=gc*(.5+.6*dif+.3*hm);a=.6;}}"
+  "if(pc){float id=floor(vc.b-19.5);bool lq=id>9.5;if(lq)id-=10.;vec2 tc=vc.rg;vec4 tq=id<.5?texture2D(t0,tc):(id<1.5?texture2D(t1,tc):(id<2.5?texture2D(t2,tc):(id<3.5?texture2D(t3,tc):(id<4.5?texture2D(t4,tc):texture2D(t5,tc)))));if(lq&&tq.a<.5)discard;al=tq.rgb;if(vsn>.01)al=mix(al,vec3(.93,.96,1.),smoothstep(.1,.6,N.y)*vsn*(lq?.95:.5));}"
+  "vec3 L=normalize(sd);float dl=dot(N,L),dif=lfx?(max(dl,0.)+.25*max(-dl,0.)):max(dl,0.),hm=.5+.5*N.y,si=clamp(L.y*2.5+.2,0.,1.),nt=1.-clamp(L.y*4.+.6,0.,1.);"
+  "float g=n(wp.xz*5.+wp.y*3.)*.55+n(wp.xz*19.+wp.y*11.)*.45;c=al*(lfx?.84+.28*g:((rk||pc)?1.:.72+.56*g));float sh=1.;if(ss>.5)sh=shw(.0012+.004*(1.-dif));c*=(.22+.3*hm)*mix(vec3(.9,.95,1.1),vec3(.5,.65,1.25),nt)*mix(lit,.62,nt)+si*dif*sh*vec3(.95,.88,.72)+vec3(.45,.55,.95)*.5*max(-dl,0.)*nt;if(gt>.5){vec3 gc=gt<1.5?vec3(.22,.6,1.):vec3(1.,.25,.2);c=gc*(.5+.6*dif+.3*hm);a=.6;}}"
   "else if(tx<1.5){vec2 p=wp.xz;float hh=wp.y,sl=1.-vc.g,bio=vc.b,li=vc.r,big=n(p*.07),mid=n(p*.6),fine=n(p*3.)*.5+n(p*13.)*.5;"
   "vec3 gr=mix(vec3(.2,.4,.12),vec3(.34,.5,.16),mid);gr=mix(gr,gr*vec3(1.35,1.1,.55),smoothstep(.45,.8,big)*.8);vec3 sa=mix(vec3(.74,.66,.46),vec3(.83,.75,.55),fine),ds=mix(vec3(.82,.6,.34),vec3(.92,.72,.44),mid),sw=mix(vec3(.86,.9,.97),vec3(.98,.99,1.),fine),rkc=mix(vec3(.46,.44,.4),vec3(.6,.57,.52),fine)*(.78+.3*n(vec2(hh*1.3+n(p*.05)*4.,(p.x+p.y)*.015)))*(.9+.15*n(p*.9));"
   "float sf=1.-smoothstep(.8,2.3,hh+(n(p*.35)-.5)*1.6+(fine-.5)*.6),dz=smoothstep(.2,.8,bio)*(1.-smoothstep(1.2,1.8,bio)),sz=smoothstep(1.2,1.8,bio);"
@@ -690,7 +696,7 @@ static float WHT[8] = {0, 2.72f, 2.72f, 2.72f, 1.25f, .9f, 0, 0}, FIT[8] = {1, 1
 static const int COST[8] = {40, 20, 20, 20, 12, 8, 25, 15};
 static const char* MN[8] = {"foundation", "wall", "doorway", "window_wall", "half_wall", "low_wall", "ceiling", "door"};
 static const float ID4[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-static GLuint mVbo[8], mIbo[8], mTex[6], dummyTex, rTex; static int mCnt[8]; static bool mReady = false; static GLint uMm = -1, uShMm = -1, uGt = -1, uRm = -1, uRmo = -1;
+static GLuint mVbo[8], mIbo[8], mTex[6], dummyTex, rTex; static bool mTexOk[6]; static int mCnt[8]; static bool mReady = false; static GLint uMm = -1, uShMm = -1, uGt = -1, uRm = -1, uRmo = -1;
 static float boff = 0, brot = 0; static int bhinge = 1;
 struct Gh { bool on, ok; int type; float x, y, z, yaw; int hinge; char why[48]; };
 static Gh gh = {};
@@ -713,7 +719,7 @@ static void drawModel(int m, const float* M, bool sh) {
 static void useStream() { glBindBuffer(GL_ARRAY_BUFFER, streamVbo); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, (void*)0); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); }
 static void loadModels() {
   glGenTextures(6, mTex);
-  for (int k = 0; k < 6; k++) { glActiveTexture(GL_TEXTURE0); int ok = texUp(mTex[k], k); glActiveTexture(GL_TEXTURE2 + k); glBindTexture(GL_TEXTURE_2D, ok ? mTex[k] : dummyTex); }
+  for (int k = 0; k < 6; k++) { glActiveTexture(GL_TEXTURE0); int ok = texUp(mTex[k], k); mTexOk[k] = ok != 0; glActiveTexture(GL_TEXTURE2 + k); glBindTexture(GL_TEXTURE_2D, ok ? mTex[k] : dummyTex); }
   glActiveTexture(GL_TEXTURE0); glGenBuffers(8, mVbo); glGenBuffers(8, mIbo);
   for (int m = 0; m < 8; m++) {
     int nv = glbN(MN[m], 0), ni = glbN(MN[m], 1); if (!nv || !ni) continue;
@@ -783,21 +789,35 @@ static float surfaceY(float x, float z, float feet, float base) {
 }
 // ---- world nodes (trees, rocks, ore, bushes): 64x64 unit chunks in a hash grid, structure of arrays inside a chunk ----
 static const int NCS = 64;
+// Plants: one entry per model in models/tree_assets, in the order of NAMES in index.html. The node type of a plant is 20 + index.
+enum { P_OAK1 = 20, P_OAK2, P_OAK3, P_BIRCHS, P_BIRCHT1, P_BIRCHT2, P_SPRS, P_SPRM, P_SPRT, P_BUSHT, P_BUSHW, P_BUSHH, P_BUSHD, P_SAG1, P_SAG2, P_BARREL, P_PEAR };
+struct Sp { const char* nm; float rad; int kind; };   // rad: trunk collision radius at scale 1 (bushes: size of the soft zone) | kind: 0 tree (wood) | 1 bush (soft, nothing to harvest) | 2 cactus (water) | 3 cactus (wood)
+static const int NSP = 17;
+static const Sp SPC[NSP] = {
+  {"oak_01", .75f, 0}, {"oak_02", .88f, 0}, {"oak_03", .6f, 0},
+  {"birch_short_01", .34f, 0}, {"birch_tall_01", .36f, 0}, {"birch_tall_02", .36f, 0},
+  {"spruce_small_01", .42f, 0}, {"spruce_mid_01", .5f, 0}, {"spruce_tall_01", .58f, 0},
+  {"bush_tall_01", 1.f, 1}, {"bush_wide_01", 1.4f, 1}, {"bush_hedge_01", 1.5f, 1}, {"bush_dry_01", 1.f, 1},
+  {"cactus_saguaro_01", .55f, 3}, {"cactus_saguaro_02", .6f, 3}, {"cactus_barrel_01", .55f, 2}, {"cactus_pear_01", .5f, 2}};
+static void trLoadStep();   // uploads the plant models, defined with the plant runtime further down
 struct Cell { unsigned vbo[2]; int n[2]; float y0, y1; signed char band; bool dirty, built; };   // one 32x32 static batch: [0] opaque, [1] alpha-tested
-struct NChunk { int cx, cz, n, dead; bool mod; vector<float> x, z, y, t; vector<int> type, hp; vector<signed char> cell; Cell c[4]; };
+struct NChunk { int cx, cz, n, dead; bool mod; vector<float> x, z, y, t, sc, rt, sn; vector<int> type, hp;   // sc / rt / sn: scale, yaw and snow amount of a plant
+    vector<signed char> cell; Cell c[4]; };
 static unordered_map<long long, NChunk*> nchm;
 struct DeadRef { NChunk* c; int i; }; static vector<DeadRef> deadList;   // harvested nodes waiting to respawn (event driven, nothing else is touched)
-static int nodeHp(int ty) { return ty == 0 || ty == 4 || ty == 7 || (ty >= 11 && ty <= 17) ? 5 : ty == 1 || ty == 5 || ty == 6 ? 7 : ty == 3 ? 4 : ty == 9 ? 3 : 1; }
+static int nodeHp(int ty) { if (ty >= 20) { int k = SPC[ty - 20].kind; return k == 1 ? 1 : k == 2 ? 3 : 5; } return ty == 1 || ty == 5 || ty == 6 ? 7 : 1; }
 static NChunk* ncFind(int cx, int cz) { auto it = nchm.find(ckey(cx, cz)); return it == nchm.end() ? 0 : it->second; }
 static void nodeStep(float dt) {   // collision with the nodes around the player (3x3 chunks) + respawn timers
   int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS);
   for (int j = cz - 1; j <= cz + 1; j++) for (int i = cx - 1; i <= cx + 1; i++) {
     NChunk* c = ncFind(i, j); if (!c) continue;
     for (int k = 0; k < c->n; k++) {
-      float nx = c->x[k], nz = c->z[k]; if (c->hp[k] <= 0 || fabsf(nx - px) > 2.2f || fabsf(nz - pz) > 2.2f) continue;   // cheap reject first: nothing farther than 2.2 can touch the player
+      float nx = c->x[k], nz = c->z[k]; if (c->hp[k] <= 0 || fabsf(nx - px) > 3.f || fabsf(nz - pz) > 3.f) continue;   // cheap reject first: nothing farther than 3 can touch the player
       int ty = c->type[k];
-      if (ty != 2 && ty != 8 && ty != 10 && ty != 14 && ty != 15 && ty != 16) { float r = ty == 0 || ty == 4 || ty == 7 || (ty >= 11 && ty <= 13) ? .9f : ty == 1 || ty == 5 || ty == 6 ? 1.3f : ty == 9 || ty == 17 ? .6f : .5f; push(px, pz, nx - r, nz - r, nx + r, nz + r); }
-      else { float bx = px - nx, bz = pz - nz; if (bx*bx + bz*bz < 3.5f) inBush = true; }
+      if (ty >= 20) { const Sp& sp = SPC[ty - 20]; float r = sp.rad*c->sc[k];
+        if (sp.kind == 1) { float bx = px - nx, bz = pz - nz; if (bx*bx + bz*bz < r*r*.6f) inBush = true; }   // bushes are soft: walk through, the leaves rustle
+        else push(px, pz, nx - r, nz - r, nx + r, nz + r); }
+      else push(px, pz, nx - 1.3f, nz - 1.3f, nx + 1.3f, nz + 1.3f);
     }
   }
   for (size_t q = 0; q < deadList.size();) {
@@ -909,7 +929,7 @@ static void act() {
   for (int j = (int)czn - 1; j <= (int)czn + 1; j++) for (int i = (int)cxn - 1; i <= (int)cxn + 1; i++) {
     NChunk* c = ncFind(i, j); if (!c) continue;
     for (int k = 0; k < c->n; k++) {
-      int ty = c->type[k]; if (c->hp[k] <= 0 || ty == 2 || ty == 8 || ty == 10) continue;
+      int ty = c->type[k]; if (c->hp[k] <= 0 || (ty >= 20 && SPC[ty - 20].kind == 1)) continue;
       float dx = c->x[k] - px, dz = c->z[k] - pz, d = sqrtf(dx*dx + dz*dz);
       if (d < bd && dx*fx + dz*fz > .6f*d) { bd = d; bc = c; bi = k; }
     }
@@ -917,11 +937,12 @@ static void act() {
   if (!bc) { if (hgt(px + fx*3, pz + fz*3) < -.2f) { thirst = fminf(100.f, thirst + 18); say("Пьёшь воду"); } else say("Мимо"); return; }
   int ty = bc->type[bi]; bc->mod = true;
   if (--bc->hp[bi] <= 0) { bc->t[bi] = 60; bc->dead++; deadList.push_back(DeadRef{bc, bi}); bc->c[bc->cell[bi]].dirty = true; shDirty = true; }
-  if (ty == 0 || ty == 3 || ty == 4 || ty == 7 || (ty >= 11 && ty <= 17)) { wood += 10; say("+10 дерева"); }
+  int kd = ty >= 20 ? SPC[ty - 20].kind : -1;
+  if (kd == 0 || kd == 3) { wood += 10; say("+10 дерева"); }
+  else if (kd == 2) { thirst = fminf(100.f, thirst + 22); say("+22 воды"); }
   else if (ty == 1) { stone += 8; say("+8 камня"); }
   else if (ty == 5) { metal += 6; say("+6 металла"); }
   else if (ty == 6) { sulfur += 6; say("+6 серы"); }
-  else { thirst = fminf(100.f, thirst + 22); say("+22 воды"); }
 }
 static EM_BOOL tc(int type, const EmscriptenTouchEvent* e, void*) {
   for (int i = 0; i < e->numTouches; i++) {
@@ -937,7 +958,7 @@ static EM_BOOL tc(int type, const EmscriptenTouchEvent* e, void*) {
 }
 static void update(float dt) {
   PROF_SCOPE(1);
-  static bool mld = false; if (!mld && gk(11)) { loadModels(); mld = true; } doorStep(dt);
+  static bool mld = false; if (!mld && gk(11)) { loadModels(); mld = true; } doorStep(dt); trLoadStep();
   inBush = false; tod += dt/240; if (tod > 1) tod -= 1; cd -= dt; msgT -= dt;
   food -= dt*.4f; thirst = fmaxf(0.f, thirst - dt*.55f);
   if (food <= 0 || thirst <= 0) { food = fmaxf(food, 0.f); hp -= dt*2; } else if (food > 50 && thirst > 50 && hp < 100) hp = fminf(100, hp + dt*2);
@@ -959,40 +980,6 @@ static void update(float dt) {
     if (a0 != l0 || a1 != l1 || a2 != l2 || a4 != l4 || fabsf(tod - lt) > .002f) { l0 = a0; l1 = a1; l2 = a2; l4 = a4; lt = tod; aud(a0, a1, a2, tod, a4); } }
   mode = gk(2); updGhost();
   if (gk(0) && cd <= 0) act();
-}
-static void seg(float x0, float y0, float z0, float x1, float y1, float z1, float r0, float r1, float cr, float cg, float cb) {
-  for (int i = 0; i < 6; i++) {
-    float a0 = i*1.0472f, a1 = a0 + 1.0472f, l = .7f + .3f*cosf(a0 - 2.2f);
-    float p0x = x0 + r0*cosf(a0), p0z = z0 + r0*sinf(a0), p1x = x0 + r0*cosf(a1), p1z = z0 + r0*sinf(a1);
-    float q0x = x1 + r1*cosf(a0), q0z = z1 + r1*sinf(a0), q1x = x1 + r1*cosf(a1), q1z = z1 + r1*sinf(a1);
-    vb.push_back({p0x, y0, p0z, cr*l, cg*l, cb*l}); vb.push_back({p1x, y0, p1z, cr*l, cg*l, cb*l}); vb.push_back({q1x, y1, q1z, cr*l, cg*l, cb*l});
-    vb.push_back({p0x, y0, p0z, cr*l, cg*l, cb*l}); vb.push_back({q1x, y1, q1z, cr*l, cg*l, cb*l}); vb.push_back({q0x, y1, q0z, cr*l, cg*l, cb*l});
-  }
-}
-static void palm(float x, float y, float z) {
-  float an = vn((int)(x*5), (int)(z*5))*6.28f, bx = cosf(an)*.1f, bz = sinf(an)*.1f, Tx = x, Ty = y, Tz = z;
-  for (int k = 0; k < 5; k++) {
-    float nx = x + bx*(k+1)*(k+1), nz = z + bz*(k+1)*(k+1), ny = y + (k+1)*1.35f;
-    seg(Tx, Ty - (k ? 0.f : .3f), Tz, nx, ny, nz, .3f - .03f*k, .3f - .03f*(k+1), .5f, .38f, .24f); Tx = nx; Ty = ny; Tz = nz;
-  }
-  for (int q = 0; q < 7; q++) {
-    float b = q*.8976f + vn(q, (int)x)*.4f, ex = cosf(b), ez = sinf(b), sx = -ez, sz = ex;
-    for (int i = 0; i < 3; i++) {
-      float t0 = i/3.f, t1 = (i+1)/3.f, w0 = .6f*(1 - t0*.85f), w1 = .6f*(1 - t1*.85f);
-      float X0 = Tx + ex*3.6f*t0, Y0 = Ty + 1.2f*sinf(t0*2.2f) - 2.8f*t0*t0, Z0 = Tz + ez*3.6f*t0;
-      float X1 = Tx + ex*3.6f*t1, Y1 = Ty + 1.2f*sinf(t1*2.2f) - 2.8f*t1*t1, Z1 = Tz + ez*3.6f*t1;
-      vb.push_back({X0 - sx*w0, Y0, Z0 - sz*w0, .12f, .36f, .1f}); vb.push_back({X0 + sx*w0, Y0, Z0 + sz*w0, .12f, .36f, .1f}); vb.push_back({X1 + sx*w1, Y1, Z1 + sz*w1, .3f, .6f, .16f});
-      vb.push_back({X0 - sx*w0, Y0, Z0 - sz*w0, .12f, .36f, .1f}); vb.push_back({X1 + sx*w1, Y1, Z1 + sz*w1, .3f, .6f, .16f}); vb.push_back({X1 - sx*w1, Y1, Z1 - sz*w1, .3f, .6f, .16f});
-    }
-  }
-}
-static void cone(float x, float y, float z, float rad, float h, float r, float g, float b) {
-  for (int i = 0; i < 8; i++) {
-    float a0 = i*.7854f, a1 = a0 + .7854f, l = .5f + .5f*fmaxf(0.f, cosf(a0 + .39f - 2.2f));
-    vb.push_back({x+rad*cosf(a0), y, z+rad*sinf(a0), r*l, g*l, b*l});
-    vb.push_back({x+rad*cosf(a1), y, z+rad*sinf(a1), r*l, g*l, b*l});
-    vb.push_back({x, y+h, z, r*l*1.15f, g*l*1.15f, b*l*1.15f});
-  }
 }
 static float rockD(float dx, float dy, float dz, int sd, float rough) {
   float s = (float)(sd & 1023);
@@ -1020,123 +1007,6 @@ static void blob(float x, float y, float z, float rx, float ry, float rz, int se
   for (int i = 0; i < 12; i++) { float l = sqrtf(IV[i][0]*IV[i][0] + IV[i][1]*IV[i][1] + IV[i][2]*IV[i][2]); for (int k = 0; k < 3; k++) U[i][k] = IV[i][k]/l; }
   RB o = {x, y + .4f*ry, z, rx, ry, rz, rough, seed, mat};
   for (int f = 0; f < 20; f++) rtri(o, U[IF[f][0]], U[IF[f][1]], U[IF[f][2]], lev);
-}
-static void cardN(float x, float y, float z, float nx, float ny, float nz, float w, float roll, int pal, float t) {   // leaf card lying on a surface with normal n
-  float ux = nz, uz = -nx, ul = sqrtf(ux*ux + uz*uz); if (ul < 1e-3f) { ux = 1; uz = 0; ul = 1; } ux /= ul; uz /= ul;
-  float vx = -ny*ux*0 + ny*uz, vy = nz*ux - nx*uz, vz = -ny*ux;
-  float cr = cosf(roll), sr = sinf(roll), Ux = ux*cr + vx*sr, Uy = vy*sr, Uz = uz*cr + vz*sr, Vx = -ux*sr + vx*cr, Vy = vy*cr, Vz = -uz*sr + vz*cr, hw = w*.5f, B = 2.f + pal + t*.99f;
-  tv(x-(Ux+Vx)*hw, y-(Uy+Vy)*hw, z-(Uz+Vz)*hw, 0, 0, B); tv(x+(Ux-Vx)*hw, y+(Uy-Vy)*hw, z+(Uz-Vz)*hw, 1, 0, B); tv(x+(Ux+Vx)*hw, y+(Uy+Vy)*hw, z+(Uz+Vz)*hw, 1, 1, B);
-  tv(x-(Ux+Vx)*hw, y-(Uy+Vy)*hw, z-(Uz+Vz)*hw, 0, 0, B); tv(x+(Ux+Vx)*hw, y+(Uy+Vy)*hw, z+(Uz+Vz)*hw, 1, 1, B); tv(x+(Vx-Ux)*hw, y+(Vy-Uy)*hw, z+(Vz-Uz)*hw, 0, 1, B);
-}
-static void shell(float cx, float cy, float cz, float rx, float ry, float rz, int n, int seed, int pal, float cw) {   // leaves growing on an ellipsoid dome
-  for (int i = 0; i < n; i++) {
-    float a = vn(seed + i*3, i)*6.2832f, e = vn(i, seed + i*7)*1.45f - .05f, ca = cosf(e), dx = cosf(a)*ca, dy = sinf(e), dz = sinf(a)*ca, k = .8f + .2f*vn(seed*5 + i, i*3);
-    float nx = dx/rx, ny = dy/ry, nz = dz/rz, nl = sqrtf(nx*nx + ny*ny + nz*nz);
-    cardN(cx + dx*rx*k, cy + dy*ry*k, cz + dz*rz*k, nx/nl, ny/nl, nz/nl, cw*(.8f + .5f*vn(i, seed+5)), vn(i*3, seed)*6.28f, pal, fminf(.99f, .25f + .5f*dy + .3f*vn(i, seed+3)));
-  }
-}
-static void card(float x, float y, float z, float w, float a, float tilt, int pal, float t) {   // leaf card (alpha-tested in shader)
-  float ca = cosf(a), sa = sinf(a), st = sinf(tilt), ct = cosf(tilt), hw = w*.5f, B = 2.f + pal + t*.99f;
-  float ux = ca*hw, uz = sa*hw, vx = -sa*st*hw, vy = ct*hw, vz = ca*st*hw;
-  tv(x-ux-vx, y-vy, z-uz-vz, 0, 0, B); tv(x+ux-vx, y-vy, z+uz-vz, 1, 0, B); tv(x+ux+vx, y+vy, z+uz+vz, 1, 1, B);
-  tv(x-ux-vx, y-vy, z-uz-vz, 0, 0, B); tv(x+ux+vx, y+vy, z+uz+vz, 1, 1, B); tv(x-ux+vx, y+vy, z-uz+vz, 0, 1, B);
-}
-static void crown(float cx, float cy, float cz, float R, int n, int seed, int pal, float cs) {
-  for (int i = 0; i < n; i++) {
-    float a = vn(seed + i*3, i)*6.2832f, e = (vn(i, seed + i*7) - .25f)*1.9f, rr = R*(.4f + .6f*vn(seed*5 + i, i*3));
-    card(cx + cosf(a)*cosf(e)*rr, cy + sinf(e)*rr*.75f, cz + sinf(a)*cosf(e)*rr, R*.9f*cs, vn(i*2, seed)*6.2832f, .3f + 2.4f*vn(seed, i*5), pal, fminf(.99f, .3f + .3f*sinf(e) + .4f*vn(i, seed+3)));
-  }
-}
-static void pine(float x, float y, float z, float sc, int lod, int pal) {   // lod 0 near .. 2 far (fewer, bigger cards keep the silhouette)
-  seg(x, y-.3f, z, x, y+9.f*sc, z, .55f*sc, .1f*sc, .3f, .2f, .11f);
-  int nt = lod == 0 ? 8 : lod == 1 ? 6 : 4, nb = lod == 0 ? 6 : lod == 1 ? 5 : 3; float cw = lod == 0 ? 1.25f : lod == 1 ? 1.7f : 2.6f;
-  for (int t = 0; t < nt; t++) {
-    float f = t/(float)(nt-1), ty = y + (1.4f + f*7.2f)*sc, len = (3.2f - 2.5f*f)*sc;
-    for (int q = 0; q < nb; q++) {
-      float a = q*6.2832f/nb + t*.9f + vn(t*7+q, (int)(x*3))*.5f;
-      card(x + cosf(a)*len*.5f, ty - .35f*len*(1.f - .5f*f), z + sinf(a)*len*.5f, len*cw, a - 1.5708f, 2.f + .35f*vn(q, t), pal, .2f + .6f*f + .15f*vn(q, t+3));
-    }
-  }
-  card(x, y + 9.f*sc, z, 1.6f*sc, 0, 0, pal, .8f);
-}
-static void oak(float x, float y, float z, float sc, int seed, int lod) {
-  seg(x, y-.3f, z, x, y+1.2f*sc, z, .55f*sc, .38f*sc, .4f, .34f, .27f); seg(x, y+1.2f*sc, z, x, y+3.6f*sc, z, .38f*sc, .24f*sc, .42f, .36f, .28f);
-  int n = lod == 0 ? 22 : lod == 1 ? 11 : 5; float cs = lod == 0 ? 1.f : lod == 1 ? 1.45f : 2.1f;
-  for (int q = 0; q < 4; q++) {
-    float a = q*1.57f + vn(seed, q)*.9f, bx = x + cosf(a)*2.2f*sc, bz = z + sinf(a)*2.2f*sc, by = y + (4.6f + 1.2f*vn(q, seed))*sc;
-    if (lod < 2) seg(x, y+3.2f*sc, z, bx, by, bz, .2f*sc, .07f*sc, .4f, .33f, .26f);
-    crown(bx, by + .8f*sc, bz, 2.3f*sc, n, seed + q*5, 0, cs);
-  }
-  crown(x, y + 5.8f*sc, z, 2.4f*sc, n, seed + 41, 0, cs);
-}
-static void birch(float x, float y, float z, float sc, int seed, int lod) {
-  /* profile family: birch_short, birch_tall_01 and birch_tall_02 */
-  float lean = (vn(seed, 19) - .5f)*.35f*sc;
-  seg(x, y-.25f, z, x+lean*.35f, y+2.8f*sc, z-lean*.2f, .3f*sc, .17f*sc, .78f, .76f, .65f);
-  seg(x+lean*.35f, y+2.8f*sc, z-lean*.2f, x+lean, y+5.1f*sc, z-lean*.5f, .17f*sc, .07f*sc, .8f, .78f, .68f);
-  int n = lod == 0 ? 15 : lod == 1 ? 8 : 4; float cs = lod == 0 ? .85f : lod == 1 ? 1.2f : 1.8f;
-  crown(x+lean, y+5.1f*sc, z-lean*.5f, 1.8f*sc, n, seed+31, 0, cs);
-  crown(x-1.1f*sc, y+4.6f*sc, z+.25f*sc, 1.45f*sc, n, seed+47, 0, cs);
-  crown(x+1.1f*sc, y+4.7f*sc, z-.25f*sc, 1.5f*sc, n, seed+59, 0, cs);
-}
-static void spruce(float x, float y, float z, float sc, int seed, int lod) {
-  /* profile family: spruce_small, spruce_mid and spruce_tall */
-  sc *= .88f + .24f*vn(seed, 77);
-  int tiers = lod == 0 ? 6 : lod == 1 ? 4 : 3;
-  seg(x, y-.25f, z, x, y+8.f*sc, z, .38f*sc, .09f*sc, .32f, .23f, .14f);
-  for (int q = 0; q < tiers; q++) { float f=q/(float)tiers, h=(1.6f+f*5.7f)*sc, r=(2.25f*(1.f-f*.72f))*sc;
-    cone(x, y+h, z, r, 2.5f*sc*(1.f-f*.42f), .08f, .24f, .13f);
-  }
-  (void)seed;
-}
-static void bush(float x, float y, float z, int seed, int lod, int pal) {   // procedural stand-in for bush_tall, bush_wide, bush_hedge and bush_dry
-  float profile = vn(seed, 91); if (profile < .25f) pal = 2; else if (profile < .5f) pal = 2; else if (profile < .75f) pal = 4; else pal = 5;
-  float cs = lod == 0 ? 1.f : lod == 1 ? 1.4f : 2.f, k = lod == 0 ? 1.f : lod == 1 ? 2.f : 3.f; if (pal == 5) k *= 1.5f;
-  if (lod < 2) for (int q = 0; q < 4; q++) { float a = q*1.57f + vn(seed, q); seg(x, y-.2f, z, x + cosf(a)*.9f, y + .9f, z + sinf(a)*.9f, .05f, .025f, .32f, .22f, .12f); }
-  if (seed & 1) {
-    crown(x, y + .95f, z, 1.9f, (int)(36/k), seed, pal, cs); crown(x + .6f, y + .6f, z - .4f, 1.3f, (int)(18/k), seed + 17, pal, cs);
-    crown(x - .7f, y + .55f, z + .5f, 1.2f, (int)(16/k), seed + 29, pal, cs); crown(x, y + .35f, z, 1.4f, (int)(14/k), seed + 3, pal, cs);
-  } else {
-    crown(x, y + 1.5f, z, 1.2f, (int)(26/k), seed, pal, cs); crown(x + .15f, y + 2.4f, z, .85f, (int)(14/k), seed + 7, pal, cs); crown(x, y + .8f, z, 1.5f, (int)(18/k), seed + 13, pal, cs);
-  }
-}
-static void tube(const float* P, const float* Rr, int np, int sides, float mat) {   // swept ring tube along a path (rotation-minimising frames)
-  static float ring[16][12][3]; float u[3] = {0, 0, 0};
-  for (int k = 0; k < np; k++) {
-    int a = k > 0 ? k - 1 : 0, b = k < np - 1 ? k + 1 : k;
-    float t[3] = {P[b*3] - P[a*3], P[b*3+1] - P[a*3+1], P[b*3+2] - P[a*3+2]}, tl = sqrtf(t[0]*t[0] + t[1]*t[1] + t[2]*t[2]) + 1e-6f; for (int i = 0; i < 3; i++) t[i] /= tl;
-    if (k == 0) { float ref[3] = {fabsf(t[1]) > .9f ? 1.f : 0.f, fabsf(t[1]) > .9f ? 0.f : 1.f, 0.f}; u[0] = t[1]*ref[2] - t[2]*ref[1]; u[1] = t[2]*ref[0] - t[0]*ref[2]; u[2] = t[0]*ref[1] - t[1]*ref[0]; }
-    else { float d = u[0]*t[0] + u[1]*t[1] + u[2]*t[2]; for (int i = 0; i < 3; i++) u[i] -= t[i]*d; }
-    float ul = sqrtf(u[0]*u[0] + u[1]*u[1] + u[2]*u[2]) + 1e-6f; for (int i = 0; i < 3; i++) u[i] /= ul;
-    float v[3] = {t[1]*u[2] - t[2]*u[1], t[2]*u[0] - t[0]*u[2], t[0]*u[1] - t[1]*u[0]};
-    for (int s = 0; s < sides; s++) { float an = s*6.2832f/sides, c = cosf(an), sn = sinf(an); for (int i = 0; i < 3; i++) ring[k][s][i] = P[k*3+i] + (u[i]*c + v[i]*sn)*Rr[k]; }
-  }
-  float m = 10.f*(mat + 1) + .9f;
-  for (int k = 0; k < np - 1; k++) for (int s = 0; s < sides; s++) {
-    int s2 = (s + 1) % sides; float g0 = (float)s/sides, g1 = (float)(s + 1)/sides;
-    tv(ring[k][s][0], ring[k][s][1], ring[k][s][2], m, g0, 0); tv(ring[k][s2][0], ring[k][s2][1], ring[k][s2][2], m, g1, 0); tv(ring[k+1][s2][0], ring[k+1][s2][1], ring[k+1][s2][2], m, g1, 0);
-    tv(ring[k][s][0], ring[k][s][1], ring[k][s][2], m, g0, 0); tv(ring[k+1][s2][0], ring[k+1][s2][1], ring[k+1][s2][2], m, g1, 0); tv(ring[k+1][s][0], ring[k+1][s][1], ring[k+1][s][2], m, g0, 0);
-  }
-}
-static void cactus(float x, float y, float z, int seed, int lod) {   // saguaro with curved arms / barrel / paddle cluster
-  int k = ((seed % 3) + 3) % 3, sides = lod == 0 ? 10 : lod == 1 ? 7 : 5; float s = 1.f + .4f*vn(seed, 3), P[16*3], Rr[16];
-  if (k == 0) {
-    int np = 0; float H = 4.4f*s, r0 = .36f*s;
-    for (int i = 0; i < 6; i++) { float t = i/5.f; P[np*3] = x + .12f*s*sinf(t*2.f + seed); P[np*3+1] = y - .2f + (H + .2f)*t; P[np*3+2] = z; Rr[np++] = r0*(1.35f - .35f*t); }
-    for (int i = 1; i <= 3; i++) { float th = i*.5236f; P[np*3] = P[15]; P[np*3+1] = y + H + r0*sinf(th); P[np*3+2] = z; Rr[np++] = fmaxf(.02f, r0*cosf(th)); }
-    tube(P, Rr, np, sides, 4);
-    for (int q = 0; q < 2; q++) {
-      float a = q*3.1416f + vn(seed, q)*.7f, dx = cosf(a), dz = sinf(a), y0 = y + (1.5f + q*.9f)*s, ar = .24f*s; int m = 0;
-      const float ox[6] = {.2f, .8f, 1.3f, 1.55f, 1.6f, 1.6f}, oy[6] = {0, .05f, .3f, .85f, 1.5f, 2.f};
-      for (int i = 0; i < 6; i++) { P[m*3] = x + dx*ox[i]*s; P[m*3+1] = y0 + oy[i]*s; P[m*3+2] = z + dz*ox[i]*s; Rr[m++] = ar; }
-      for (int i = 1; i <= 3; i++) { float th = i*.5236f; P[m*3] = P[15]; P[m*3+1] = y0 + 2.f*s + ar*sinf(th); P[m*3+2] = P[17]; Rr[m++] = fmaxf(.02f, ar*cosf(th)); }
-      tube(P, Rr, m, sides, 4);
-    }
-  } else if (k == 1) {
-    const float hy[7] = {0, .25f, .6f, 1.f, 1.4f, 1.7f, 1.85f}, rr[7] = {.2f, .75f, .98f, 1.f, .86f, .5f, .06f};
-    for (int i = 0; i < 7; i++) { P[i*3] = x; P[i*3+1] = y + hy[i]*s*.9f - .1f; P[i*3+2] = z; Rr[i] = rr[i]*.85f*s; }
-    tube(P, Rr, 7, sides + 2 > 12 ? 12 : sides + 2, 4);
-  } else for (int q = 0; q < 4; q++) { float a = q*1.57f + vn(seed, q), qx = x + cosf(a)*.5f*s, qz = z + sinf(a)*.5f*s; blob(qx, y + .3f*q*s, qz, (q & 1 ? .22f : .8f)*s, .62f*s, (q & 1 ? .8f : .22f)*s, seed + q, 4, .1f, 1); }
 }
 static void ore(float x, float y, float z, int t, int seed, int lod) {   // 0 stone, 1 metal, 2 sulfur: one fused boulder (+8 = snow-capped)
   if (biomeAt(x, z) > 1.5f) t += 8;
@@ -1178,10 +1048,28 @@ static void collectTerrain() {   // blocks that cover the old 105 unit window an
   for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) { TChunk* c = tcGet(i, j); if (inFrus(fr, i*80.f, c->y0 - .5f, j*80.f, i*80.f + 80.f, c->y1 + .5f, j*80.f + 80.f)) tvis.push_back(c); }
 }
 // ---- world nodes: generation (deterministic per chunk) ----
+// Which plant (or rock) grows at a spot. Every model only grows where the terrain shader paints its own ground (grass .. bio .4, sand .55 .. 1.25, snow 1.45 ..),
+// nothing grows on the beach (low ground), and the cacti need a good margin of height above the sand strip. -1 = nothing here.
+static int plantPick(float bio, float h, float stand, float q) {
+  if (bio < .4f) {   // grass: oak, birch, bushes; conifers only up in the hills
+    if (h < 2.8f) return -1;
+    if (h > 18.f) return q < .34f ? P_SPRS : q < .58f ? P_SPRM : q < .70f ? P_BIRCHS : q < .82f ? P_OAK3 : P_BUSHH;
+    if (stand > .72f) return q < .2f ? P_OAK1 : q < .31f ? P_OAK2 : q < .43f ? P_OAK3 : q < .53f ? P_BIRCHS : q < .64f ? P_BIRCHT1 : q < .74f ? P_BIRCHT2 : q < .82f ? P_BUSHT : q < .91f ? P_BUSHW : P_BUSHH;
+    return q < .14f ? P_OAK1 : q < .22f ? P_OAK2 : q < .33f ? P_OAK3 : q < .43f ? P_BIRCHS : q < .52f ? P_BIRCHT1 : q < .6f ? P_BIRCHT2 : q < .72f ? P_BUSHT : q < .86f ? P_BUSHW : P_BUSHH;
+  }
+  if (bio < 1.45f) {   // sand: cacti, dry bushes, rocks
+    if (h < 3.4f) return -1;
+    if (bio < .55f) return q < .4f ? P_BUSHD : -1;   // thin edge between the grass and the sand
+    if (bio < 1.25f) return q < .2f ? P_SAG1 : q < .4f ? P_SAG2 : q < .62f ? P_BARREL : q < .8f ? P_PEAR : q < .92f ? P_BUSHD : 1;
+    return q < .3f ? P_BUSHD : q < .4f ? 1 : -1;     // towards the snow: no cacti any more
+  }
+  if (h < 2.8f) return -1;   // snow: spruce, a few birches, dry bushes, rocks
+  return q < .2f ? P_SPRS : q < .46f ? P_SPRM : q < .68f ? P_SPRT : q < .76f ? P_BIRCHS : q < .84f ? P_BIRCHT1 : q < .93f ? P_BUSHD : 1;
+}
 static void ncGen(int cx, int cz) {
   NChunk* c = new NChunk(); c->cx = cx; c->cz = cz; c->dead = 0; c->mod = false;
   for (int k = 0; k < 4; k++) { Cell& e = c->c[k]; e.vbo[0] = e.vbo[1] = 0; e.n[0] = e.n[1] = 0; e.y0 = 0; e.y1 = 1; e.band = -1; e.dirty = true; e.built = false; }
-  c->x.reserve(48); c->z.reserve(48); c->y.reserve(48); c->t.reserve(48); c->type.reserve(48); c->hp.reserve(48); c->cell.reserve(48);
+  c->x.reserve(48); c->z.reserve(48); c->y.reserve(48); c->t.reserve(48); c->sc.reserve(48); c->rt.reserve(48); c->sn.reserve(48); c->type.reserve(48); c->hp.reserve(48); c->cell.reserve(48);
   // Deterministic jittered lattice: low-frequency noise makes forests, groves and clearings.
   for (int i = 0; i < 64; i++) {
     int gx = i % 8, gz = i / 8;
@@ -1190,25 +1078,18 @@ static void ncGen(int cx, int cz) {
     float sl, h = meshH(x, z, &sl), r = vn(cx*13 + i*3, cz*7 + i), bio = biomeAt(x, z);
     float stand = pn(x*.018f + 31.f, z*.018f - 17.f), clearing = pn(x*.055f - 8.f, z*.055f + 12.f);
     if (hypotf(x - spX, z - spZ) < 6.f || h < .8f || h > 62.f || sl > .42f || blockedAt(x, z)) continue;
-    int bi = bio < .5f ? 0 : bio < 1.5f ? 1 : 2, ty = -1;
     float chance = .18f + .68f*stand; if (clearing > .72f) chance *= .16f;
     if (r > chance) continue;
-    if (bi == 0) {
-      if (h < 1.8f) ty = r < .7f ? 2 : -1;
-      else if (stand > .72f) ty = r < .17f ? 0 : r < .34f ? 11 : r < .49f ? 12 : r < .61f ? 13 : r < .77f ? 4 : r < .87f ? 14 : 15;
-      else ty = r < .14f ? 0 : r < .28f ? 4 : r < .4f ? 11 : r < .49f ? 12 : r < .57f ? 13 : r < .75f ? 2 : r < .84f ? 14 : 15;
-    } else if (bi == 1) ty = r < .31f ? 9 : r < .47f ? 17 : r < .57f ? 3 : r < .67f ? 10 : r < .75f ? 16 : r < .83f ? 1 : -1;
-    else ty = r < .40f ? 7 : r < .55f ? 12 : r < .64f ? 11 : r < .75f ? 8 : r < .84f ? 1 : -1;
-    if (ty < 0) continue;
-    float rad = ty == 1 || ty == 5 || ty == 6 ? 1.7f : ty == 2 || ty == 8 || ty == 10 ? 1.5f : ty == 11 || ty == 12 ? 1.25f : .7f;
+    int ty = plantPick(bio, h, stand, vn(cx*53 + i*17, cz*31 + i*5)); if (ty < 0) continue;
+    bool pl = ty >= 20; float q2 = vn(cx*7 + i*19, cz*61 + i*3), sc = pl ? .78f + .4f*q2 : 1.f, rot = vn(cx*3 + i*23, cz*5 + i*11)*6.2832f, snow = pl ? sst(1.3f, 1.8f, bio) : 0.f;
+    float rad = pl ? fminf(1.2f, fmaxf(.5f, SPC[ty - 20].rad*sc)) : 1.7f;
     float yy = fminf(h, fminf(fminf(meshH(x + rad, z), meshH(x - rad, z)), fminf(meshH(x, z + rad), meshH(x, z - rad))));   // sink into slopes, never float
-    c->x.push_back(x); c->z.push_back(z); c->y.push_back(yy); c->t.push_back(0.f); c->type.push_back(ty); c->hp.push_back(nodeHp(ty));
+    c->x.push_back(x); c->z.push_back(z); c->y.push_back(yy); c->t.push_back(0.f); c->sc.push_back(sc); c->rt.push_back(rot); c->sn.push_back(snow); c->type.push_back(ty); c->hp.push_back(nodeHp(ty));
     c->cell.push_back((signed char)((x - cx*64.f >= 32.f ? 1 : 0) + (z - cz*64.f >= 32.f ? 2 : 0)));
   }
   c->n = (int)c->x.size(); nchm[ckey(cx, cz)] = c;
 }
 // ---- 32x32 static batches of nodes (and beach pebbles): baked once per detail level, redrawn only when something changes ----
-static vector<V> vtmp[2];
 static int bandFor(float d2, int cur) {   // 0 full detail | 1 medium | 2 low | 3 low without bushes; hysteresis keeps cells from flip-flopping
   static const float T[3] = {1500.f, 5000.f, 8100.f}; int b = 0; while (b < 3 && d2 >= T[b]) b++;
   if (cur >= 0 && b != cur) { float lo = cur > 0 ? T[cur - 1] : -1e9f, hi = cur < 3 ? T[cur] : 1e30f; if (d2 > lo*.88f && d2 < hi*1.12f) return cur; }
@@ -1222,24 +1103,9 @@ static void cellBuild(NChunk* c, int k, int band) {
   Cell& e = c->c[k]; vb.clear(); int lod = band > 2 ? 2 : band;
   for (int i = 0; i < c->n; i++) {
     if (c->cell[i] != k || c->hp[i] <= 0) continue;
-    int ty = c->type[i]; if ((ty == 2 || ty == 8 || ty == 10 || ty == 14 || ty == 15 || ty == 16) && band > 2) continue;
+    int ty = c->type[i]; if (ty != 1 && ty != 5 && ty != 6) continue;   // plants are not baked: they are drawn instanced from their models
     float nx = c->x[i], ny = c->y[i], nz = c->z[i]; int sd0 = (int)(nx*7) ^ (int)(nz*13);
-    if (ty == 0) pine(nx, ny, nz, .9f + .6f*vn(sd0, 1), lod, 1);
-    else if (ty == 7) pine(nx, ny, nz, .9f + .6f*vn(sd0, 1), lod, 3);
-    else if (ty == 11) birch(nx, ny, nz, .65f + .42f*vn(sd0, 4), sd0, lod);
-    else if (ty == 12) spruce(nx, ny, nz, .72f + .5f*vn(sd0, 5), sd0, lod);
-    else if (ty == 13) oak(nx, ny, nz, .72f + .48f*vn(sd0, 6), sd0 + 13, lod);
-    else if (ty == 14) bush(nx, ny, nz, sd0, lod, 2);
-    else if (ty == 15) bush(nx, ny, nz, sd0 ^ 0x51f, lod, 2);
-    else if (ty == 16) bush(nx, ny, nz, sd0 ^ 0x2a7, lod, 5);
-    else if (ty == 17) cactus(nx, ny, nz, sd0 + 17, lod);
-    else if (ty == 1 || ty == 5 || ty == 6) ore(nx, ny, nz, ty == 1 ? 0 : ty - 4, sd0, lod);
-    else if (ty == 2) bush(nx, ny, nz, sd0, lod, 2);
-    else if (ty == 8) bush(nx, ny, nz, sd0, lod, 4);
-    else if (ty == 10) bush(nx, ny, nz, sd0, lod, 5);
-    else if (ty == 4) oak(nx, ny, nz, .9f + .5f*vn(sd0, 2), sd0, lod);
-    else if (ty == 9) cactus(nx, ny, nz, sd0, lod);
-    else palm(nx, ny, nz);
+    ore(nx, ny, nz, ty == 1 ? 0 : ty - 4, sd0, lod);
   }
   if (band == 0) {   // stones on the beach
     int tx0 = (int)floorf((c->cx*64.f + (k & 1)*32.f)/2), tz0 = (int)floorf((c->cz*64.f + (k >> 1)*32.f)/2);
@@ -1250,10 +1116,9 @@ static void cellBuild(NChunk* c, int k, int band) {
       float s = .12f + .3f*vn(gx+9, gz); blob(x, h - .03f, z, s, s*.55f, s*.8f, gx^gz, 3, .3f, 0);
     }
   }
-  vtmp[0].clear(); vtmp[1].clear(); float y0 = 1e9f, y1 = -1e9f;
-  for (size_t i = 0; i + 2 < vb.size(); i += 3) { int cut = (vb[i].b > 1.5f && vb[i].b < 19.5f) ? 1 : 0; vtmp[cut].insert(vtmp[cut].end(), vb.begin() + i, vb.begin() + i + 3); }   // alpha-tested leaf cards are drawn last
+  float y0 = 1e9f, y1 = -1e9f;
   for (size_t i = 0; i < vb.size(); i++) { y0 = fminf(y0, vb[i].y); y1 = fmaxf(y1, vb[i].y); }
-  for (int p = 0; p < 2; p++) { e.n[p] = (int)vtmp[p].size(); if (e.n[p]) { if (!e.vbo[p]) e.vbo[p] = bufGet(); bufUp(e.vbo[p], vtmp[p].data(), e.n[p]); } }
+  e.n[0] = (int)vb.size(); e.n[1] = 0; if (e.n[0]) { if (!e.vbo[0]) e.vbo[0] = bufGet(); bufUp(e.vbo[0], vb.data(), e.n[0]); }
   e.y0 = vb.empty() ? 0.f : y0; e.y1 = vb.empty() ? 1.f : y1; e.band = (signed char)band; e.dirty = false; e.built = true; vb.clear();
   if (cellD2(c->cx, c->cz, k) < 4900.f) shDirty = true;   // changed geometry near the player: refresh the shadow map
 }
@@ -1367,6 +1232,76 @@ static void drawPcsInst(const Frus& f, bool shadow) {
   }
   glUniformMatrix4fv(um, 1, 0, ID4); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 }
+// ---- plants: the GLB models (3 detail levels each) are uploaded once, every plant node is one instance (scale / yaw / snow in its matrix) ----
+struct TrPart { GLuint vbo, ibo; int n; };   // n = number of indices (0: this part does not exist)
+struct TrSp { bool ok; float bb[6], R; GLuint tex[4]; TrPart p[3][2]; };
+static TrSp TS[NSP]; static GLuint trTexId[64]; static bool trTexOk[64]; static int trStage = 0, trNext = 0;
+static vector<float> tinst[NSP][3];
+static void restoreModelTex() {   // the plants borrow texture units 2..5 while they are drawn: give them back to the building pieces
+  for (int k = 0; k < 6; k++) { glActiveTexture(GL_TEXTURE2 + k); glBindTexture(GL_TEXTURE_2D, (mReady && mTexOk[k]) ? mTex[k] : dummyTex); }
+  glActiveTexture(GL_TEXTURE0);
+}
+static void trLoadStep() {   // runs every frame until everything is uploaded: the textures first, then one species per frame (no long hitch)
+  if (trStage == 0) {
+    if (!trReady()) return;
+    int nt = trNTex(); if (nt > 64) nt = 64;
+    if (nt > 0) glGenTextures(nt, trTexId);
+    for (int g = 0; g < nt; g++) trTexOk[g] = trTexUp(trTexId[g], g) != 0;
+    glActiveTexture(GL_TEXTURE0); trStage = 1; return;
+  }
+  if (trNext >= NSP) return;
+  int s = trNext++; TrSp& t = TS[s]; t.ok = false;
+  if (!trN(s, 0, 0, 1) && !trN(s, 0, 1, 1)) return;   // model missing: this species is simply not drawn
+  for (int k = 0; k < 6; k++) t.bb[k] = trB(s, k);
+  t.R = fmaxf(fmaxf(fabsf(t.bb[0]), fabsf(t.bb[3])), fmaxf(fabsf(t.bb[2]), fabsf(t.bb[5])));
+  bool good = true;
+  for (int k = 0; k < 4; k++) { int g = trSlot(s, k); if (g < 0) t.tex[k] = dummyTex; else if (g < 64 && trTexOk[g]) t.tex[k] = trTexId[g]; else { t.tex[k] = dummyTex; good = false; } }
+  if (!good) return;   // a texture could not be decoded: better no tree than white squares
+  for (int l = 0; l < 3; l++) for (int pt = 0; pt < 2; pt++) {
+    TrPart& q = t.p[l][pt]; q.vbo = q.ibo = 0; q.n = 0;
+    int nv = trN(s, l, pt, 0), ni = trN(s, l, pt, 1); if (!nv || !ni) continue;
+    vector<V> v(nv); vector<unsigned short> ix(ni); trV(s, l, pt, (float*)v.data()); trI(s, l, pt, ix.data());
+    glGenBuffers(1, &q.vbo); glBindBuffer(GL_ARRAY_BUFFER, q.vbo); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)nv*sizeof(V), v.data(), GL_STATIC_DRAW);
+    glGenBuffers(1, &q.ibo); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, q.ibo); glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)ni*2, ix.data(), GL_STATIC_DRAW); q.n = ni;
+  }
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); glBindBuffer(GL_ARRAY_BUFFER, streamVbo);
+  t.ok = true; shDirty = true;
+}
+static void trDraw(const Frus& f, bool shadow) {   // all plants near the player: culled, sorted into (species, detail level) lists, one instanced draw call per list and part
+  if (trStage < 1) return;
+  for (int s = 0; s < NSP; s++) for (int l = 0; l < 3; l++) tinst[s][l].clear();
+  const float D0 = shadow ? 100.f : 196.f, D1 = shadow ? 1024.f : 2025.f, DF = shadow ? 8100.f : 12544.f;   // squared distances: full detail | medium | draw limit
+  int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS); bool any = false;
+  for (int j = cz - 2; j <= cz + 2; j++) for (int i = cx - 2; i <= cx + 2; i++) {
+    NChunk* c = ncFind(i, j); if (!c) continue;
+    for (int k = 0; k < c->n; k++) {
+      int ty = c->type[k]; if (ty < 20 || c->hp[k] <= 0) continue;
+      int s = ty - 20; const TrSp& t = TS[s]; if (!t.ok) continue;
+      float x = c->x[k], z = c->z[k], dx = x - px, dz = z - pz, d2 = dx*dx + dz*dz; if (d2 > DF) continue;
+      float sc = c->sc[k], y = c->y[k], R = t.R*sc;
+      if (!inFrus(f, x - R, y + t.bb[1]*sc, z - R, x + R, y + t.bb[4]*sc, z + R)) continue;
+      float a = c->rt[k], ca = cosf(a)*sc, sa = sinf(a)*sc, M[16] = {ca, 0, -sa, c->sn[k],  0, sc, 0, 0,  sa, 0, ca, 0,  x, y, z, 1};
+      vector<float>& L = tinst[s][d2 < D0 ? 0 : d2 < D1 ? 1 : 2]; L.insert(L.end(), M, M + 16); any = true;
+    }
+  }
+  if (!any) return;
+  GLint ui = shadow ? uShInst : uInst, um = shadow ? uShMm : uMm;
+  for (int part = 0; part < 2; part++) for (int s = 0; s < NSP; s++) {   // opaque trunks first, then the alpha-tested leaves
+    const TrSp& t = TS[s]; if (!t.ok || (tinst[s][0].empty() && tinst[s][1].empty() && tinst[s][2].empty())) continue;
+    bool bound = false;
+    for (int l = 0; l < 3; l++) { int n = (int)tinst[s][l].size()/16; const TrPart& q = t.p[l][part]; if (!n || !q.n) continue;
+      if (!bound) { for (int k = 0; k < 4; k++) { glActiveTexture(GL_TEXTURE2 + k); glBindTexture(GL_TEXTURE_2D, t.tex[k]); } glActiveTexture(GL_TEXTURE0); bound = true; }
+      glBindBuffer(GL_ARRAY_BUFFER, q.vbo); attribs(); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, q.ibo);
+      if (instOk) {
+        glBindBuffer(GL_ARRAY_BUFFER, instVbo); glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)n*64, tinst[s][l].data(), GL_STREAM_DRAW);
+        for (int k = 0; k < 4; k++) { glEnableVertexAttribArray(2 + k); glVertexAttribPointer(2 + k, 4, GL_FLOAT, 0, 64, (void*)(size_t)(k*16)); glVertexAttribDivisorANGLE(2 + k, 1); }
+        glUniform1f(ui, 1.f); glDrawElementsInstancedANGLE(GL_TRIANGLES, q.n, GL_UNSIGNED_SHORT, 0, n); glUniform1f(ui, 0.f);
+        for (int k = 0; k < 4; k++) { glVertexAttribDivisorANGLE(2 + k, 0); glDisableVertexAttribArray(2 + k); }
+      } else for (int m = 0; m < n; m++) { glUniformMatrix4fv(um, 1, 0, &tinst[s][l][m*16]); glDrawElements(GL_TRIANGLES, q.n, GL_UNSIGNED_SHORT, 0); }
+    }
+  }
+  restoreModelTex(); glUniformMatrix4fv(um, 1, 0, ID4); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); glBindBuffer(GL_ARRAY_BUFFER, streamVbo); attribs();
+}
 // ---- streaming: everything near the player is generated / baked with a small time budget per frame, everything far away is released ----
 static void resetWorldCaches() {
   for (auto& kv : tcm) { TChunk* c = kv.second; bufPut(c->vbo); bufPut(c->wvbo); c->vbo = c->wvbo = 0; tcPool.push_back(c); } tcm.clear(); tcLast = 0;
@@ -1436,7 +1371,7 @@ static void shadowPass(const float* LM) {   // only what touches the sun's box i
   glBindFramebuffer(GL_FRAMEBUFFER, shFbo); glViewport(0, 0, 2048, 2048);
   glClearColor(1, 1, 1, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST);
   glUseProgram(shProg); glUniformMatrix4fv(uShLm, 1, 0, LM); glUniformMatrix4fv(uShMm, 1, 0, ID4); glUniform1f(uShInst, 0.f);
-  drawCells(lf, 0, true); drawCells(lf, 1, true); drawPlats(lf, true); drawPcsInst(lf, true);
+  drawCells(lf, 0, true); trDraw(lf, true); drawPlats(lf, true); drawPcsInst(lf, true);
   glBindBuffer(GL_ARRAY_BUFFER, streamVbo); attribs();
   glBindFramebuffer(GL_FRAMEBUFFER, 0); glViewport(0, 0, W, H); glUseProgram(prog);
 }
@@ -1451,11 +1386,11 @@ static void drawWorld(const float* A, const float* sky, float lt, float lo) {
   PROF_SCOPE(15);
   glUniform1f(uInst, 0.f); glUniformMatrix4fv(uMm, 1, 0, ID4);
   collectTerrain();
-  setU(A, sky, lo, 0.f); drawCells(fr, 0, false); drawPlats(fr, false);            // 1. opaque nodes: terrain pixels behind them never reach the heavy terrain shader (early z)
+  setU(A, sky, lo, 0.f); drawCells(fr, 0, false); drawPlats(fr, false);            // 1. opaque rocks: terrain pixels behind them never reach the heavy terrain shader (early z)
   if (mReady) { setU(A, sky, lt, 0.f); drawPcsInst(fr, false); }                    // 2. building pieces, instanced
   setU(A, sky, lt, 1.f); for (size_t i = 0; i < tvis.size(); i++) tcDraw(tvis[i]);  // 3. terrain
   setU(A, sky, lt, 8.f); drawGrass(fr);                                             // 4. grass (wind in the vertex shader)
-  setU(A, sky, lo, 0.f); drawCells(fr, 1, false);                                   // 5. alpha-tested leaves last
+  setU(A, sky, lo, 0.f); trDraw(fr, false);                                          // 5. plants (GLB models, instanced, alpha-tested leaves)
   setU(A, sky, lt, 2.f); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); for (size_t i = 0; i < tvis.size(); i++) tcWater(tvis[i]); glDisable(GL_BLEND);   // 6. water
   setU(A, sky, lt, 0.f);
   if (mReady && gh.on) { Pc g = {gh.type, gh.x, gh.y, gh.z, gh.yaw, gh.hinge, 0.f, 0.f}; float M[16]; pcMat(M, g); glUniform1f(uGt, gh.ok ? 1.f : 2.f); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); drawModel(g.type, M, false); glDisable(GL_BLEND); glUniform1f(uGt, 0.f); glUniformMatrix4fv(uMm, 1, 0, ID4); }
@@ -1592,13 +1527,11 @@ int main() {
   glEnableVertexAttribArray(0); glEnableVertexAttribArray(1);
   glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, (void*)0); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12);
   {
-    const char* svs = "attribute vec3 p;attribute vec3 c;attribute vec4 i0;attribute vec4 i1;attribute vec4 i2;attribute vec4 i3;uniform mat4 lm;uniform mat4 mm;uniform float inst;varying float z;varying vec3 vc;void main(){gl_Position=lm*((inst>.5?mat4(i0,i1,i2,i3):mm)*vec4(p,1.));z=gl_Position.z*.5+.5;vc=c;}";
-    const char* sfs = "precision highp float;varying float z;varying vec3 vc;"
-      "float h(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}"
-      "float lf(vec2 q){vec2 i=floor(q),f=fract(q)-.5;float a=h(i)*6.283;f+=(vec2(h(i+7.),h(i+13.))-.5)*.3;vec2 r=vec2(cos(a)*f.x+sin(a)*f.y,-sin(a)*f.x+cos(a)*f.y);return 1.-step(1.,length(r/vec2(.52,.24)));}float lfm(vec2 u){return max(lf(u*5.),lf(u*6.+3.1))*step(length(u-.5),.5);}"
-      "void main(){if(vc.b>1.5&&vc.b<19.5&&lfm(vc.xy)<.5)discard;vec4 e=fract(z*vec4(1.,255.,65025.,16581375.));e-=e.yzww*vec4(1./255.,1./255.,1./255.,0.);gl_FragColor=e;}";
+    const char* svs = "attribute vec3 p;attribute vec3 c;attribute vec4 i0;attribute vec4 i1;attribute vec4 i2;attribute vec4 i3;uniform mat4 lm;uniform mat4 mm;uniform float inst;varying float z;varying vec3 vc;void main(){mat4 M=inst>.5?mat4(i0,i1,i2,i3):mm;vec4 w=M*vec4(p,1.);w.w=1.;gl_Position=lm*w;z=gl_Position.z*.5+.5;vc=c;}";
+    const char* sfs = "precision highp float;varying float z;varying vec3 vc;uniform sampler2D t0;uniform sampler2D t1;uniform sampler2D t2;uniform sampler2D t3;"
+      "void main(){if(vc.b>29.5){float id=vc.b-29.5;vec2 tc=vc.rg;float a=id<1.?texture2D(t0,tc).a:(id<2.?texture2D(t1,tc).a:(id<3.?texture2D(t2,tc).a:texture2D(t3,tc).a));if(a<.5)discard;}vec4 e=fract(z*vec4(1.,255.,65025.,16581375.));e-=e.yzww*vec4(1./255.,1./255.,1./255.,0.);gl_FragColor=e;}";
     shProg = glCreateProgram(); glAttachShader(shProg, sh(GL_VERTEX_SHADER, svs)); glAttachShader(shProg, sh(GL_FRAGMENT_SHADER, sfs));
-    glBindAttribLocation(shProg, 0, "p"); glBindAttribLocation(shProg, 1, "c"); glBindAttribLocation(shProg, 2, "i0"); glBindAttribLocation(shProg, 3, "i1"); glBindAttribLocation(shProg, 4, "i2"); glBindAttribLocation(shProg, 5, "i3"); glLinkProgram(shProg); uShInst = glGetUniformLocation(shProg, "inst"); uShLm = glGetUniformLocation(shProg, "lm"); uShMm = glGetUniformLocation(shProg, "mm"); glUseProgram(shProg); glUniformMatrix4fv(uShMm, 1, 0, ID4); glUseProgram(p);
+    glBindAttribLocation(shProg, 0, "p"); glBindAttribLocation(shProg, 1, "c"); glBindAttribLocation(shProg, 2, "i0"); glBindAttribLocation(shProg, 3, "i1"); glBindAttribLocation(shProg, 4, "i2"); glBindAttribLocation(shProg, 5, "i3"); glLinkProgram(shProg); uShInst = glGetUniformLocation(shProg, "inst"); uShLm = glGetUniformLocation(shProg, "lm"); uShMm = glGetUniformLocation(shProg, "mm"); glUseProgram(shProg); glUniformMatrix4fv(uShMm, 1, 0, ID4); { const char* tn[4] = {"t0", "t1", "t2", "t3"}; for (int k = 0; k < 4; k++) glUniform1i(glGetUniformLocation(shProg, tn[k]), 2 + k); } glUseProgram(p);
     glGenTextures(1, &shTex); glBindTexture(GL_TEXTURE_2D, shTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2048, 2048, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);

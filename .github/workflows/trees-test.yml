@@ -1,0 +1,24 @@
+name: temporary test build (branch trees only)
+on:
+  push:
+    branches: [trees]
+permissions:
+  contents: write
+jobs:
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.58
+      - name: build
+        continue-on-error: true
+        run: bash build.sh 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
+      - name: publish the result to a throw-away branch
+        if: always()
+        run: |
+          mkdir /tmp/out; cp build.log /tmp/out/; cp game.js game.wasm /tmp/out/ 2>/dev/null || true
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan ci-out-${{ github.run_number }}; git rm -rf . -q; cp /tmp/out/* .; git add -A; git commit -qm "ci output"
+          git push origin HEAD:refs/heads/ci-out-${{ github.run_number }}
