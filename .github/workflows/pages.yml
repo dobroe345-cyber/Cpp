@@ -1,7 +1,9 @@
 name: Deploy to GitHub Pages
 # 1. builds main.cpp with the SAME flags as build.sh and the SAME emsdk version it was tested with
 # 2. starts the built game in headless Chrome (tools/smoke_test.py); a game that does not load is never published
-# 3. keeps game.js / game.wasm in the repository root up to date (so Pages also works with "Deploy from a branch")
+# 3. AFTER the deployment, keeps game.js / game.wasm in the repository root up to date (so Pages also works with "Deploy from a branch").
+#    This must come last: the commit makes GitHub start its own "pages build and deployment" run, and if that starts while
+#    our deployment is still running it fails with "due to in progress deployment" (a red cross that means nothing).
 # 4. publishes index.html + game.js + game.wasm + icons/models/sounds to GitHub Pages
 on:
   push:
@@ -43,17 +45,12 @@ jobs:
           name: smoke-screenshot
           path: smoke.png
           if-no-files-found: ignore
-      - name: Keep game.js / game.wasm in the repository root up to date
-        if: github.ref == 'refs/heads/main'
-        continue-on-error: true
-        run: |
-          if [ -n "$(git status --porcelain -- game.js game.wasm)" ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add game.js game.wasm
-            git commit -m "Rebuild game.js and game.wasm from main.cpp [skip ci]"
-            git push
-          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-build
+          path: |
+            dist/game.js
+            dist/game.wasm
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
@@ -67,3 +64,24 @@ jobs:
     steps:
       - id: d
         uses: actions/deploy-pages@v4
+  refresh-root:
+    needs: deploy
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: game-build
+          path: built
+      - name: Keep game.js / game.wasm in the repository root up to date
+        run: |
+          cp built/game.js built/game.wasm .
+          if [ -n "$(git status --porcelain -- game.js game.wasm)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add game.js game.wasm
+            git commit -m "Rebuild game.js and game.wasm from main.cpp [skip ci]"
+            git push
+          fi
