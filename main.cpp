@@ -111,7 +111,7 @@ static const char* FS = "#extension GL_OES_standard_derivatives : enable\n"
   "float g=n(wp.xz*5.+wp.y*3.)*.55+n(wp.xz*19.+wp.y*11.)*.45;c=al*(lfx?.84+.28*g:((rk||pc)?1.:.72+.56*g));float sh=1.;if(ss>.5)sh=shw(.0012+.004*(1.-dif));c*=(.22+.3*hm)*mix(vec3(.9,.95,1.1),vec3(.5,.65,1.25),nt)*mix(lit,.62,nt)+si*dif*sh*vec3(.95,.88,.72)+vec3(.45,.55,.95)*.5*max(-dl,0.)*nt;if(gt>.5){vec3 gc=gt<1.5?vec3(.22,.6,1.):vec3(1.,.25,.2);c=gc*(.5+.6*dif+.3*hm);a=.6;}}"
   "else if(tx<1.5){vec2 p=wp.xz;float hh=wp.y,sl=1.-vc.g,bio=vc.b,li=vc.r,big=n(p*.07),mid=n(p*.6),fine=n(p*3.)*.5+n(p*13.)*.5;"
   "vec3 gr=mix(vec3(.2,.4,.12),vec3(.34,.5,.16),mid);gr=mix(gr,gr*vec3(1.35,1.1,.55),smoothstep(.45,.8,big)*.8);vec3 sa=mix(vec3(.74,.66,.46),vec3(.83,.75,.55),fine),ds=mix(vec3(.82,.6,.34),vec3(.92,.72,.44),mid),sw=mix(vec3(.86,.9,.97),vec3(.98,.99,1.),fine),rkc=mix(vec3(.46,.44,.4),vec3(.6,.57,.52),fine)*(.78+.3*n(vec2(hh*1.3+n(p*.05)*4.,(p.x+p.y)*.015)))*(.9+.15*n(p*.9));"
-  "float sf=1.-smoothstep(.8,2.3,hh+(n(p*.35)-.5)*1.6+(fine-.5)*.6),dz=smoothstep(.2,.8,bio)*(1.-smoothstep(1.2,1.8,bio)),sz=smoothstep(1.2,1.8,bio);"
+  "float sf=1.-smoothstep(.8,2.3,hh+(n(p*.35)-.5)*1.6+(fine-.5)*.6),dz=smoothstep(.2,.8,bio),sz=smoothstep(1.2,1.8,-bio);"
   "vec3 al=mix(gr,sa,sf);al=mix(al,ds*(.9+.2*sin(p.x*.5+p.y*.3+n(p*.15)*6.)),dz);al=mix(al,sw,sz*(1.-.5*sf));al*=mix(.62,1.,smoothstep(-.3,.5,hh));vec3 mountainRock=mix(vec3(.34,.35,.32),vec3(.56,.52,.45),fine);al=mix(al,mountainRock,max(smoothstep(.1,.2,sl+(fine-.5)*.05),smoothstep(38.,60.,hh+(big-.5)*20.)*smoothstep(.03,.08,sl)));"
   "vec4 rv=texture2D(rm,(wp.xz-rmo.xy)/rmo.z);if(rv.r+rv.g+rv.b>.01){float g2=n(p*22.)*.5+n(p*7.)*.5,ra=smoothstep(.44,.56,rv.r),rg=smoothstep(.03,.3,rv.r),tq=smoothstep(.3,.62,rv.g+(fine-.5)*.3),pa=smoothstep(.46,.54,rv.b),mq=smoothstep(.46,.54,rv.a);vec3 tc=mix(mix(vec3(.4,.3,.19),vec3(.5,.39,.25),g2),mix(vec3(.66,.5,.3),vec3(.72,.57,.35),g2),dz);tc=mix(tc,vec3(.55,.5,.46),sz*.7);vec3 ac=vec3(.21,.21,.22)*(.8+.5*g2)*(.9+.2*n(p*1.5)),gv=mix(vec3(.45,.4,.34),vec3(.55,.5,.42),g2),rc=mix(gv,ac,ra);rc=mix(rc,sw,sz*.35*(1.-ra));vec3 cc=mix(vec3(.5),vec3(.62,.62,.6),g2)*(.88+.2*n(p*.8));al=mix(al,tc,tq*.92);al=mix(al,rc,rg);al=mix(al,cc,pa);al=mix(al,rv.b>.5?vec3(.92,.74,.1):vec3(.9,.82,.5),mq*max(ra,pa));}"
   "c=al*li*(.7+.55*(mid*.35+fine*.65));float nt=1.-clamp(normalize(sd).y*4.+.6,0.,1.);c*=mix(lit,.62,nt)*mix(vec3(1.),vec3(.55,.7,1.25),nt);if(ss>.5)c*=1.-(1.-shw(.004))*.45*clamp(sd.y*2.5+.2,0.,1.);}"
@@ -142,17 +142,23 @@ static float pn(float x, float z) {
   return (vn(ix,iz)*(1-fx) + vn(ix+1,iz)*fx)*(1-fz) + (vn(ix,iz+1)*(1-fx) + vn(ix+1,iz+1)*fx)*fz;
 }
 static float MS = 1.4f, bioRot = 0.f, WE = 616.f;   // map scale (1 = the original island), biome rotation, half-size of the world
-static float biomeAt(float x, float z) {   // 0 temperate, 1 desert, 2 winter; continuous land zones, no artificial radial ring
+// Biome weights: d = desert (0..1), w = winter (0..1). The two never overlap (separate angular sectors) and a temperate hub around the centre
+// keeps them apart where the sectors converge, so desert and winter never touch and the snow has no desert outline.
+static void bioParts(float x, float z, float& d, float& w) {
   float bn = atan2f(z, x)/6.2832f + .5f + bioRot + (pn(x*.006f, z*.006f) - .5f)*.18f;
   bn -= floorf(bn);
   auto sm = [](float a, float b, float x) { float t=fminf(1.f,fmaxf(0.f,(x-a)/(b-a))); return t*t*(3.f-2.f*t); };
-  float d = sm(.07f, .16f, bn) * (1.f - sm(.30f, .39f, bn));
+  float dd = sm(.07f, .16f, bn) * (1.f - sm(.30f, .39f, bn));
   float sn = sm(.56f, .63f, bn) * (1.f - sm(.82f, .9f, bn));
-  // Break the old ring look with broad, low-frequency land masks while keeping Seed variation.
   float land = .72f + .28f*pn(x*.0028f + 17.f, z*.0028f - 9.f);
-  d *= land; sn *= .82f + .18f*pn(x*.0035f - 21.f, z*.0035f + 13.f);
-  return d + 2.f*sn;
+  float hub = sm(45.f*MS, 115.f*MS, hypotf(x, z));
+  d = dd*land*hub;
+  w = fminf(1.f, sn*(1.15f + .35f*(pn(x*.0035f - 21.f, z*.0035f + 13.f) - .5f)))*hub;
 }
+// gameplay class (plants, rocks, audio): 0 temperate, 0..1 desert amount, 1.4 = ramp to the snow (ground half snow), 2 = snow
+static float biomeAt(float x, float z) { float d, w; bioParts(x, z, d, w); return w > .9f ? 2.f : w > .6f ? 1.4f : d; }
+static float bioW(float x, float z) { float d, w; bioParts(x, z, d, w); return w; }
+static float biomeV(float x, float z) { float d, w; bioParts(x, z, d, w); return d - 2.f*w; }   // terrain vertex channel: > 0 desert, < 0 winter (never mixed)
 static inline float sst(float a, float b, float x) { float t = fminf(1.f, fmaxf(0.f, (x - a)/(b - a))); return t*t*(3.f - 2.f*t); }
 static inline float rdg(float v) { v = 1.f - fabsf(2.f*v - 1.f); return v*v; }   // ridged noise: sharp crest where the value noise crosses .5
 // natural terrain, island radius ~330*MS. Pure function of (x,z) and the seed, so every chunk / lattice node agrees (no seams).
@@ -230,7 +236,7 @@ static TChunk* tcMake(int cx, int cz) {
   for (int j = 0; j < TCV; j++) for (int i = 0; i < TCV; i++) {
     float x = (cx*TCN + i)*5.f, z = (cz*TCN + j)*5.f, h = hgt(x, z);
     float dx = hgt(x - 2, z) - hgt(x + 2, z), dz = hgt(x, z - 2) - hgt(x, z + 2), l = sqrtf(dx*dx + 16 + dz*dz);
-    c->h[j*TCV + i] = h; V t = {x, h, z, .5f + .5f*fmaxf(0.f, (dx*.4f + 3.f - dz*.5f)/l), 4/l, biomeAt(x, z)}; c->v[j*TCV + i] = t;
+    c->h[j*TCV + i] = h; V t = {x, h, z, .5f + .5f*fmaxf(0.f, (dx*.4f + 3.f - dz*.5f)/l), 4/l, biomeV(x, z)}; c->v[j*TCV + i] = t;
     y0 = fminf(y0, h); y1 = fmaxf(y1, h);
   }
   for (int j = 0; j < TCN; j++) for (int i = 0; i < TCN; i++) {
@@ -626,12 +632,18 @@ static void mmLine(unsigned char* img, int M, float x0, float z0, float x1, floa
 static void fillMap(unsigned char* img, int M) {
   const float E = WE;
   for (int j = 0; j < M; j++) for (int i = 0; i < M; i++) {
-    float x = (i/(M - 1.f)*2 - 1)*E, z = (j/(M - 1.f)*2 - 1)*E, h = sampG(gH, x, z), bio = biomeAt(x, z), r, g, b;
+    float x = (i/(M - 1.f)*2 - 1)*E, z = (j/(M - 1.f)*2 - 1)*E, h = sampG(gH, x, z), d, w, r, g, b; bioParts(x, z, d, w);
     if (h < -.2f) { float t = fminf(1.f, (-.2f - h)/4); r = .2f - .15f*t; g = .5f - .3f*t; b = .75f - .2f*t; }
     else if (h < 1.6f) { r = .85f; g = .78f; b = .55f; }
-    else if (bio > 1.5f) { r = .93f; g = .96f; b = 1.f; }
-    else if (bio > .5f) { r = .85f; g = .65f; b = .38f; }
-    else { float t = fminf(1.f, h/18.f); r = .25f + .35f*t; g = .5f - .05f*t; b = .2f + .25f*t; }
+    else {
+      float t = fminf(1.f, h/18.f), kd = sst(.2f, .8f, d), kw = sst(.6f, .9f, w);
+      r = .25f + .1f*t; g = .5f - .08f*t; b = .2f + .04f*t;                                   // grass, a little darker up the hills
+      r += (.85f - r)*kd; g += (.65f - g)*kd; b += (.38f - b)*kd;                              // desert
+      r += (.93f - r)*kw; g += (.96f - g)*kw; b += (1.f - b)*kw;                              // snow
+      float G = sampG(gS, x, z), sl = 1.f - 1.f/sqrtf(1.f + G*G);                              // steep or high ground is bare rock (terrain shader rule) and mountains are grey
+      float rk = fmaxf(fmaxf(sst(.1f, .2f, sl), sst(38.f, 60.f, h)*sst(.03f, .08f, sl)), .92f*sst(7.f, 18.f, h));   // + high ground reads as mountain
+      r += (.52f - r)*rk; g += (.52f - g)*rk; b += (.5f - b)*rk;                               // grey in every biome
+    }
     float sh = 1.f + fmaxf(-.4f, fminf(.4f, (sampG(gH, x + 4, z) - h)*.1f)); if (h < -.2f) sh = 1.f;
     unsigned char* q = img + (j*M + i)*4; q[0] = (unsigned char)fminf(255.f, r*sh*255); q[1] = (unsigned char)fminf(255.f, g*sh*255); q[2] = (unsigned char)fminf(255.f, b*sh*255); q[3] = 255;
   }
@@ -988,7 +1000,7 @@ static void update(float dt) {
   bool jmp = false; if (gk(1) && py <= gy + .01f) { vy = 7.8f; jmp = true; }
   vy -= 20*dt; py += vy*dt; if (py < gy + .25f && vy <= 0) { py = gy; vy = 0; }
   { float mag = hypotf(sx, sy), b2 = biomeAt(px, pz); bool grd = py <= gy + .05f;   // audio is event driven: the JS side is only called when something changed
-    int a0 = b2 > 1.5f ? 2 : (b2 > .5f || gy < 1.6f) ? 1 : 0, a1 = (mag > .12f && grd) ? (mag > .95f ? 2 : 1) : 0, a2 = inBush ? 1 : 0, a4 = jmp ? 1 : 0;
+    int a0 = b2 > 1.3f ? 2 : (b2 > .5f || gy < 1.6f) ? 1 : 0, a1 = (mag > .12f && grd) ? (mag > .95f ? 2 : 1) : 0, a2 = inBush ? 1 : 0, a4 = jmp ? 1 : 0;
     static int l0 = -1, l1 = -1, l2 = -1, l4 = -1; static float lt = -9.f;
     if (a0 != l0 || a1 != l1 || a2 != l2 || a4 != l4 || fabsf(tod - lt) > .002f) { l0 = a0; l1 = a1; l2 = a2; l4 = a4; lt = tod; aud(a0, a1, a2, tod, a4); } }
   mode = gk(2); updGhost();
@@ -1022,7 +1034,7 @@ static void blob(float x, float y, float z, float rx, float ry, float rz, int se
   for (int f = 0; f < 20; f++) rtri(o, U[IF[f][0]], U[IF[f][1]], U[IF[f][2]], lev);
 }
 static void ore(float x, float y, float z, int t, int seed, int lod) {   // 0 stone, 1 metal, 2 sulfur: one fused boulder (+8 = snow-capped)
-  if (biomeAt(x, z) > 1.5f) t += 8;
+  if (biomeAt(x, z) > 1.3f) t += 8;
   blob(x, y, z, 1.9f, 1.5f, 1.7f, seed, t, .42f, lod == 0 ? 2 : 1);
 }
 // ===================== render caches: static batches, frustum culling, streaming =====================
@@ -1062,7 +1074,7 @@ static void collectTerrain() {   // blocks that cover the old 105 unit window an
 }
 // ---- world nodes: generation (deterministic per chunk) ----
 // Which plant (or rock) grows at a spot. Every model only grows where the terrain shader paints its own ground: grass (bio < .35), sand (.65 .. 1.2),
-// snow (>= 1.6); in the colour ramps between them only dry bushes and rocks. Nothing grows on the beach (low ground), and the cacti need a good margin of
+// snow (>= 1.6); in the colour ramps between them only dry bushes, rocks and (towards the snow) a few conifers. Nothing grows on the beach (low ground), and the cacti need a good margin of
 // height above the sand strip. -1 = nothing here.
 static int plantPick(float bio, float h, float stand, float q) {
   if (bio < .35f) {   // grass: oak, birch, bushes; conifers only up in the hills
@@ -1075,7 +1087,7 @@ static int plantPick(float bio, float h, float stand, float q) {
     if (h < 3.4f) return -1;
     if (bio < .65f) return q < .4f ? P_BUSHD : -1;   // edge between the grass and the sand
     if (bio < 1.2f) return q < .2f ? P_SAG1 : q < .4f ? P_SAG2 : q < .62f ? P_BARREL : q < .8f ? P_PEAR : q < .92f ? P_BUSHD : 1;
-    return q < .3f ? P_BUSHD : q < .4f ? 1 : -1;     // towards the snow: no cacti any more, no trees yet
+    return q < .22f ? P_SPRS : q < .36f ? P_SPRM : q < .5f ? P_BUSHD : q < .58f ? 1 : -1;     // ramp to the snow (the ground is half snow): sparse conifers, dry bushes, rocks
   }
   if (h < 2.8f) return -1;   // snow: only conifers (no birches), a few dry bushes, rocks
   return q < .28f ? P_SPRS : q < .58f ? P_SPRM : q < .86f ? P_SPRT : q < .94f ? P_BUSHD : 1;
@@ -1095,7 +1107,7 @@ static void ncGen(int cx, int cz) {
     float chance = .18f + .68f*stand; if (clearing > .72f) chance *= .16f;
     if (r > chance) continue;
     int ty = plantPick(bio, h, stand, vn(cx*53 + i*17, cz*31 + i*5)); if (ty < 0) continue;
-    bool pl = ty >= 20; float q2 = vn(cx*7 + i*19, cz*61 + i*3), sc = pl ? .78f + .4f*q2 : 1.f, rot = vn(cx*3 + i*23, cz*5 + i*11)*6.2832f, snow = pl ? sst(1.35f, 1.7f, bio) : 0.f;
+    bool pl = ty >= 20; float q2 = vn(cx*7 + i*19, cz*61 + i*3), sc = pl ? .78f + .4f*q2 : 1.f, rot = vn(cx*3 + i*23, cz*5 + i*11)*6.2832f, snow = pl ? sst(.6f, .9f, bioW(x, z)) : 0.f;
     float rad = pl ? fminf(1.2f, fmaxf(.5f, SPC[ty - 20].rad*sc)) : 1.7f;
     float yy = fminf(h, fminf(fminf(meshH(x + rad, z), meshH(x - rad, z)), fminf(meshH(x, z + rad), meshH(x, z - rad))));   // sink into slopes, never float
     c->x.push_back(x); c->z.push_back(z); c->y.push_back(yy); c->t.push_back(0.f); c->sc.push_back(sc); c->rt.push_back(rot); c->sn.push_back(snow); c->type.push_back(ty); c->hp.push_back(nodeHp(ty));
