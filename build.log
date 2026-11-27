@@ -1,0 +1,38 @@
+shared:INFO: (Emscripten: Running sanity checks)
+cache:INFO: generating system library: sysroot/lib/wasm32-emscripten/lto/libGL-getprocaddr.a... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/lto/libGL-getprocaddr.a" for subsequent builds)
+system_libs:INFO: compiled 4 inputs in 0.17s
+cache:INFO:  - ok
+cache:INFO: generating system library: sysroot/lib/wasm32-emscripten/lto/libal.a... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/lto/libal.a" for subsequent builds)
+system_libs:INFO: compiled 1 inputs in 0.11s
+cache:INFO:  - ok
+cache:INFO: generating system library: sysroot/lib/wasm32-emscripten/lto/libhtml5.a... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/lto/libhtml5.a" for subsequent builds)
+system_libs:INFO: compiled 5 inputs in 0.23s
+cache:INFO:  - ok
+cache:INFO: generating system library: sysroot/lib/wasm32-emscripten/lto/libstubs.a... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/lto/libstubs.a" for subsequent builds)
+system_libs:INFO: compiled 2 inputs in 0.11s
+cache:INFO:  - ok
+cache:INFO: generating system library: sysroot/lib/wasm32-emscripten/lto/libnoexit.a... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/lto/libnoexit.a" for subsequent builds)
+system_libs:INFO: compiled 1 inputs in 0.11s
+cache:INFO:  - ok
+cache:INFO: generating system library: sysroot/lib/wasm32-emscripten/lto/libc.a... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/lto/libc.a" for subsequent builds)
+system_libs:INFO: compiled 1028 inputs in 4.92s
+cache:INFO:  - ok
+cache:INFO: generating system library: sysroot/lib/wasm32-emscripten/lto/libemmalloc.a... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/lto/libemmalloc.a" for subsequent builds)
+system_libs:INFO: compiled 1 inputs in 0.16s
+cache:INFO:  - ok
+cache:INFO: generating system library: sysroot/lib/wasm32-emscripten/lto/libcompiler_rt.a... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/lto/libcompiler_rt.a" for subsequent builds)
+system_libs:INFO: compiled 162 inputs in 1.18s
+cache:INFO:  - ok
+cache:INFO: generating system library: sysroot/lib/wasm32-emscripten/lto/libc++-noexcept.a... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/lto/libc++-noexcept.a" for subsequent builds)
+system_libs:INFO: compiled 55 inputs in 10.36s
+cache:INFO:  - ok
+cache:INFO: generating system library: sysroot/lib/wasm32-emscripten/lto/libc++abi-noexcept.a... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/lto/libc++abi-noexcept.a" for subsequent builds)
+system_libs:INFO: compiled 16 inputs in 1.37s
+cache:INFO:  - ok
+cache:INFO: generating system library: sysroot/lib/wasm32-emscripten/lto/libsockets.a... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/lto/libsockets.a" for subsequent builds)
+system_libs:INFO: compiled 27 inputs in 0.44s
+cache:INFO:  - ok
+cache:INFO: generating system asset: symbol_lists/0a36ca325a014d21c0a106c9566af3eb077e666f.json... (this will be cached in "/home/runner/work/_temp/6249b757-af64-4e84-b858-74262299b0e4/emsdk-main/upstream/emscripten/cache/symbol_lists/0a36ca325a014d21c0a106c9566af3eb077e666f.json" for subsequent builds)
+cache:INFO:  - ok
+-rw-r--r-- 1 runner runner  53470 Nov 27 03:05 game.js
+-rwxr-xr-x 1 runner runner 199303 Nov 27 03:05 game.wasm
