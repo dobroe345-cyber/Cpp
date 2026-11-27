@@ -1077,8 +1077,8 @@ static int plantPick(float bio, float h, float stand, float q) {
     if (bio < 1.2f) return q < .2f ? P_SAG1 : q < .4f ? P_SAG2 : q < .62f ? P_BARREL : q < .8f ? P_PEAR : q < .92f ? P_BUSHD : 1;
     return q < .3f ? P_BUSHD : q < .4f ? 1 : -1;     // towards the snow: no cacti any more, no trees yet
   }
-  if (h < 2.8f) return -1;   // snow: spruce, a few birches, dry bushes, rocks
-  return q < .2f ? P_SPRS : q < .46f ? P_SPRM : q < .68f ? P_SPRT : q < .76f ? P_BIRCHS : q < .84f ? P_BIRCHT1 : q < .93f ? P_BUSHD : 1;
+  if (h < 2.8f) return -1;   // snow: only conifers (no birches), a few dry bushes, rocks
+  return q < .28f ? P_SPRS : q < .58f ? P_SPRM : q < .86f ? P_SPRT : q < .94f ? P_BUSHD : 1;
 }
 static void ncGen(int cx, int cz) {
   NChunk* c = new NChunk(); c->cx = cx; c->cz = cz; c->dead = 0; c->mod = false;
