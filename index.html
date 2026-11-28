@@ -61,10 +61,11 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 @media(max-height:480px){#stats{width:160px}.st{height:26px}.st u{width:26px;font-size:14px}.st i{left:28px;top:3px;bottom:3px;width:calc(100% - 36px)}.st b{font-size:14px;padding-right:12px}}
 #vig{position:fixed;inset:0;pointer-events:none;z-index:1;background:radial-gradient(ellipse at center,transparent 58%,rgba(0,0,0,.32) 100%)}
 #mapb{top:calc(12px + env(safe-area-inset-top));right:calc(14px + env(safe-area-inset-right));width:54px;height:54px;border-radius:12px}
-#map{position:fixed;inset:0;z-index:6;display:none;align-items:center;justify-content:center;background:rgba(4,10,16,.84)}
-#map.on{display:flex}
-#mc{width:min(86vh,86vw);height:min(86vh,86vw);border:2px solid rgba(255,255,255,.4);border-radius:8px;background:#0a2a44}
-#mx{position:absolute;top:calc(14px + env(safe-area-inset-top));right:calc(18px + env(safe-area-inset-right));color:#fff;font:600 15px -apple-system,system-ui,sans-serif;padding:10px 14px;background:rgba(150,160,165,.35);border-radius:10px}
+#map{position:fixed;inset:0;z-index:6;display:none;background:#0d338c;touch-action:none;overscroll-behavior:none;-webkit-user-select:none;user-select:none}
+#map.on{display:block}
+#mc{position:absolute;left:0;top:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+#mx{position:absolute;top:calc(26px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);color:#e4e4e4;font:600 16px -apple-system,system-ui,sans-serif;letter-spacing:.3px;padding:12px 30px;background:#26282b;border:1px solid #5b5e62;border-radius:0;cursor:pointer;white-space:nowrap}
+#mx:active{background:#3a3d41}
 #bar button img{width:40px;height:40px;object-fit:contain;pointer-events:none}
 #ctl{position:fixed;z-index:3;right:calc(232px + env(safe-area-inset-right));bottom:calc(112px + env(safe-area-inset-bottom));display:none;flex-direction:column;gap:8px}
 #ctl button{position:static;width:56px;height:56px;border-radius:14px;font-size:26px;background:rgba(150,160,165,.5)}
@@ -115,7 +116,6 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 #wgen.on{display:flex}
 #wgen i{width:34px;height:34px;border:4px solid rgba(255,255,255,.2);border-top-color:#f0b432;border-radius:50%;animation:wsp .8s linear infinite}
 @keyframes wsp{to{transform:rotate(360deg)}}
-#mc{position:static;inset:auto}
 #wp .acts{position:sticky;bottom:-14px;margin:10px -18px -14px;padding:10px 18px 14px;background:rgba(22,28,32,.97)}
 @media(max-height:480px){#wp{padding:10px 14px 0}#wp h2{font-size:17px}#wp .sub{display:none}#wp label{margin:8px 0 4px}#wp input[type=number],#wp button{height:38px}#wp input[type=range]{height:24px}#wp label.chk{margin:8px 0 2px}#wp .acts{bottom:0;margin:8px -14px 0;padding:8px 14px 10px}#wp #wgo{font-size:15px}}
 </style>
@@ -127,7 +127,7 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 <div id="ctl"><button id="bMenu"><img src="icons/items/plan.png"></button><button id="bUp">▲</button><button id="bDn">▼</button><button id="bRot">⟳</button></div>
 <div id="bm"><div id="ring"><svg id="rsv" viewBox="0 0 200 200"></svg><div id="hole"><b id="bn"></b><span id="bd"></span><span id="bw"></span></div></div></div>
 <button id="mapb"><b>🗺️</b></button><button id="wmb"><b>🌍</b></button>
-<div id="map"><canvas id="mc" width="512" height="512"></canvas><div id="mx">✕ Закрыть</div><div id="mleg">▬ дороги &nbsp;·&nbsp; ┄ тропы &nbsp;·&nbsp; <span style="color:#ffcd1e">■</span> платформы (РТ)</div></div>
+<div id="map"><canvas id="mc"></canvas><div id="mx">Закрыть</div><div id="mleg">▬ дороги &nbsp;·&nbsp; ┄ тропы &nbsp;·&nbsp; <span style="color:#ffcd1e">■</span> платформы (РТ) &nbsp;·&nbsp; пальцем — перемещение, двумя — масштаб</div></div>
 <div id="vig"></div>
 <button id="jump"><b>⤒</b>Прыжок</button>
 <button id="hit"><b>🪓</b><span id="hl">Удар</span></button>
@@ -143,11 +143,11 @@ button.on{background:rgba(240,180,50,.85);border-color:#fff;color:#2a1c00}
 <label>Размер карты<output id="wszo"></output></label>
 <div class="seg" id="wsz"><button data-v="0">Малая</button><button data-v="1">Средняя</button><button data-v="2">Большая</button></div>
 <label for="wpl">Платформы (РТ)<output id="wplo"></output></label>
-<input id="wpl" type="range" min="2" max="20" step="1">
+<input id="wpl" type="range" min="2" max="40" step="1">
 <label>Дороги<output id="wlpo"></output></label>
 <div class="seg" id="wlp"><button data-v="0">Минимум</button><button data-v="1">Норма</button><button data-v="2">Много</button></div>
 <label for="wtr">Тропы<output id="wtro"></output></label>
-<input id="wtr" type="range" min="0" max="24" step="1">
+<input id="wtr" type="range" min="0" max="40" step="1">
 <label class="chk"><input id="wrand" type="checkbox"><span>Новый случайный мир при каждом запуске</span></label>
 <div id="winfo"></div>
 <div class="acts"><button id="wgo">Создать мир</button><button id="wcl">Закрыть</button></div>
@@ -215,13 +215,38 @@ bm.addEventListener('pointerdown',function(e){if(e.target===bm){e.preventDefault
 bMenu.addEventListener('pointerdown',function(e){e.preventDefault();bm.classList.add('on');hi(G[8]?G[8]-1:-1);});
 window.slotChanged=function(){bm.classList.remove('on');upd();};
 bUp.addEventListener('pointerdown',function(e){e.preventDefault();G[9]+=1;});bDn.addEventListener('pointerdown',function(e){e.preventDefault();G[9]-=1;});bRot.addEventListener('pointerdown',function(e){e.preventDefault();G[10]+=1;});})();
-(function(){var mp=document.getElementById('map'),mc=document.getElementById('mc'),cx=mc.getContext('2d');
-function draw(){if(!mp.classList.contains('on'))return;var E=window.MAPE||440;cx.clearRect(0,0,512,512);
-if(window.mapCanvas){cx.imageSmoothingEnabled=true;cx.drawImage(window.mapCanvas,0,0,512,512);}else{cx.fillStyle='#fff';cx.font='20px sans-serif';cx.fillText('Загрузка карты…',170,256);}
-var P=window.PP;if(P){var x=(P.x+E)/(2*E)*512,y=(P.z+E)/(2*E)*512;cx.save();cx.translate(x,y);cx.rotate(-P.yaw);cx.fillStyle='#ff3b30';cx.strokeStyle='#fff';cx.lineWidth=2;cx.beginPath();cx.moveTo(0,-12);cx.lineTo(8,9);cx.lineTo(0,5);cx.lineTo(-8,9);cx.closePath();cx.fill();cx.stroke();cx.restore();}}
+(function(){var mp=document.getElementById('map'),mc=document.getElementById('mc'),cx=mc.getContext('2d'),mx=document.getElementById('mx');
+/* Full-screen map: the 2048 px picture built by the game (window.mapCanvas) is drawn through a view (sc = screen px per picture px,
+   ox/oy = where its top-left corner is). One finger drags, two fingers zoom (pinch), mouse wheel / double tap zoom as well. */
+var W=0,H=0,dpr=1,sc=1,ox=0,oy=0,M=2048,minS=.3,maxS=4,fitS=.5,ptr={},drag=null,pinch=null,lastTap=0,lastX=0,lastY=0,lastIm=null;
+function size(){dpr=Math.min(2,window.devicePixelRatio||1);W=window.innerWidth;H=window.innerHeight;mc.width=Math.round(W*dpr);mc.height=Math.round(H*dpr);}
+function clampV(){var w=M*sc;ox=Math.min(W*.8,Math.max(W*.2-w,ox));oy=Math.min(H*.8,Math.max(H*.2-w,oy));}
+function fit(){size();var im=window.mapCanvas;M=(im&&im.width)||2048;fitS=Math.min(W,H)/M;minS=fitS*.85;maxS=Math.max(fitS*10,1.5);sc=fitS*1.04;ox=(W-M*sc)/2;oy=(H-M*sc)/2;}
+function zoomAt(ns,px,py){ns=Math.min(maxS,Math.max(minS,ns));var ix=(px-ox)/sc,iy=(py-oy)/sc;sc=ns;ox=px-ix*sc;oy=py-iy*sc;clampV();}
+function draw(){if(!mp.classList.contains('on'))return;cx.setTransform(dpr,0,0,dpr,0,0);cx.fillStyle='#0d338c';cx.fillRect(0,0,W,H);
+var im=window.mapCanvas,E=window.MAPE||440;
+if(im){if(im!==lastIm){lastIm=im;fit();}cx.imageSmoothingEnabled=true;cx.imageSmoothingQuality='high';cx.drawImage(im,ox,oy,M*sc,M*sc);
+ var P=window.PP;if(P){var x=ox+(P.x+E)/(2*E)*M*sc,y=oy+(P.z+E)/(2*E)*M*sc;cx.save();cx.translate(x,y);cx.rotate(-P.yaw);cx.fillStyle='#ff3b30';cx.strokeStyle='#fff';cx.lineWidth=2;cx.beginPath();cx.moveTo(0,-13);cx.lineTo(9,10);cx.lineTo(0,6);cx.lineTo(-9,10);cx.closePath();cx.fill();cx.stroke();cx.restore();}}
+else{cx.fillStyle='#fff';cx.font='600 20px -apple-system,system-ui,sans-serif';cx.textAlign='center';cx.fillText('Загрузка карты… '+Math.round((window.MAPP||0)*100)+'%',W/2,H/2);}}
 window.mapDraw=draw;
-document.getElementById('mapb').addEventListener('pointerdown',function(e){e.preventDefault();G[7]=1;mp.classList.add('on');draw();setTimeout(draw,400);});
-mp.addEventListener('pointerdown',function(e){e.preventDefault();mp.classList.remove('on');});
+function open(){G[7]=1;size();if(window.mapCanvas&&window.mapCanvas!==lastIm){lastIm=window.mapCanvas;fit();}mp.classList.add('on');draw();setTimeout(draw,300);}
+function close(){mp.classList.remove('on');ptr={};drag=null;pinch=null;}
+document.getElementById('mapb').addEventListener('pointerdown',function(e){e.preventDefault();open();});
+mx.addEventListener('pointerdown',function(e){e.preventDefault();e.stopPropagation();close();});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'&&mp.classList.contains('on'))close();});
+window.addEventListener('resize',function(){if(mp.classList.contains('on')){var cxm=(W/2-ox)/sc,cym=(H/2-oy)/sc;size();ox=W/2-cxm*sc;oy=H/2-cym*sc;clampV();draw();}});
+function pts(){var k,a=[];for(k in ptr)a.push(ptr[k]);return a;}
+mc.addEventListener('pointerdown',function(e){e.preventDefault();try{mc.setPointerCapture(e.pointerId);}catch(_){}ptr[e.pointerId]={x:e.clientX,y:e.clientY};var a=pts();
+ if(a.length===1){drag={x:e.clientX,y:e.clientY,ox:ox,oy:oy};var t=Date.now();if(t-lastTap<320&&Math.hypot(e.clientX-lastX,e.clientY-lastY)<30){zoomAt(sc>fitS*3?fitS*1.04:sc*2.4,e.clientX,e.clientY);draw();lastTap=0;}else lastTap=t;lastX=e.clientX;lastY=e.clientY;}
+ else if(a.length===2){drag=null;var d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)||1;pinch={d:d,sc:sc};}});
+mc.addEventListener('pointermove',function(e){if(!ptr[e.pointerId])return;e.preventDefault();ptr[e.pointerId]={x:e.clientX,y:e.clientY};var a=pts();
+ if(a.length>=2&&pinch){var mx0=(a[0].x+a[1].x)/2,my0=(a[0].y+a[1].y)/2,d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)||1;
+  if(pinch.px===undefined){pinch.px=mx0;pinch.py=my0;}ox+=mx0-pinch.px;oy+=my0-pinch.py;pinch.px=mx0;pinch.py=my0;zoomAt(pinch.sc*d/pinch.d,mx0,my0);draw();}
+ else if(drag){ox=drag.ox+e.clientX-drag.x;oy=drag.oy+e.clientY-drag.y;clampV();draw();}});
+function up(e){delete ptr[e.pointerId];var a=pts();pinch=null;if(a.length===1)drag={x:a[0].x,y:a[0].y,ox:ox,oy:oy};else drag=null;}
+mc.addEventListener('pointerup',up);mc.addEventListener('pointercancel',up);mc.addEventListener('lostpointercapture',up);
+mc.addEventListener('wheel',function(e){e.preventDefault();zoomAt(sc*Math.exp(-e.deltaY*.0016),e.clientX,e.clientY);draw();},{passive:false});
+['gesturestart','gesturechange','gestureend'].forEach(function(n){mp.addEventListener(n,function(e){e.preventDefault();});});
 })();
 /* ---- tree models: models/tree_assets/*.glb ----------------------------------------------------------------------------
    Every plant in the game is one of these models (nothing is generated from code any more; a missing file just means that
@@ -376,8 +401,8 @@ on(document.getElementById('jump'),'pointerdown',function(){G[1]=1;});
 sl.forEach(function(b){on(b,'pointerdown',function(){G[2]=+b.dataset.s;hl.textContent=G[2]?'Строить':'Удар';if(window.slotChanged)window.slotChanged();sl.forEach(function(x){x.classList.toggle('on',x===b);});});});
 })();
 (function(){
-var KEY='minirust.world.v2',$=function(i){return document.getElementById(i);},SZ=[1,1.4,1.8],SP=[5,8,12],KM=[.63,.88,1.13];
-var D={seed:0,size:1,plat:8,loops:1,trails:8,rand:true},cfg={},saved={},k;
+var KEY='minirust.world.v3',$=function(i){return document.getElementById(i);},SZ=[3.2,4.4,5.7],SP=[5,8,12],KM=[2.0,2.8,3.6];
+var D={seed:0,size:1,plat:18,loops:1,trails:16,rand:true},cfg={},saved={},k;
 try{saved=JSON.parse(localStorage.getItem(KEY)||'{}')||{};}catch(e){}
 for(k in D)cfg[k]=saved[k]!==undefined?saved[k]:D[k];
 function rnd(){return 1+Math.floor(Math.random()*999999998);}
