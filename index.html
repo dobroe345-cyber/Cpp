@@ -5,8 +5,6 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#000000">
-<link rel="preload" href="game.wasm" as="fetch" type="application/wasm" crossorigin>
-<link rel="preload" href="game.js" as="script">
 <title>Mini-Rust</title>
 <style>
 html,body{margin:0;height:100%;background:#000;overflow:hidden;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
@@ -435,9 +433,10 @@ function hudEl(){return document.getElementById('hud');}   // not a global `hud`
 function fail(m){var g=document.getElementById('wgen');if(g)g.classList.remove('on');var h=hudEl();h.style.color='#ffb4a8';h.style.whiteSpace='pre-wrap';h.textContent=m;}
 window.onerror=function(m){fail('Ошибка: '+m);};
 window.onunhandledrejection=function(e){fail('Ошибка: '+(e.reason&&e.reason.message||e.reason));};
-var Module={canvas:document.getElementById('canvas'),print:console.log,printErr:console.warn,onAbort:function(w){fail('Сбой: '+w);}};
+var BV=Date.now();   // game.js / game.wasm are always fetched under a fresh address, so a phone never runs an old cached build with the new page
+var Module={locateFile:function(f){return f+'?v='+BV;},canvas:document.getElementById('canvas'),print:console.log,printErr:console.warn,onAbort:function(w){fail('Сбой: '+w);}};
 setTimeout(function(){if(hudEl().textContent.indexOf('Загрузка')===0)fail('Игра не запустилась за 10 секунд.\nПроверьте Settings → Pages → Source: GitHub Actions и вкладку Actions.');},10000);
 </script>
-<script src="game.js" onerror="fail('Файл game.js не найден.\nSettings → Pages → Source → GitHub Actions, затем запустите Deploy во вкладке Actions.')"></script>
+<script>(function(){var e=document.createElement('script');e.src='game.js?v='+BV;e.onerror=function(){fail('Файл game.js не найден.\nSettings → Pages → Source → GitHub Actions, затем запустите Deploy во вкладке Actions.');};document.body.appendChild(e);})();</script>
 </body>
 </html>

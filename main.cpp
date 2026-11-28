@@ -177,8 +177,8 @@ static float hgtB(float x, float z) {
   float coast = fminf(fmaxf(dc/33.f, 0.f), 1.f), inland = sst(25.f, 110.f, dc), centre = sst(20.f, 80.f, r);
   float ux = .8f*x - .6f*z, uz = .6f*x + .8f*z;   // rotated frame: the layers' value-noise lattices do not line up (no boxy shapes)
   float wx = ux + (pn(x*.006f + 3, z*.006f) - .5f)*120.f + (pn(uz*.017f, ux*.017f + 3) - .5f)*30.f, wz = uz + (pn(x*.006f, z*.006f + 8) - .5f)*120.f + (pn(ux*.017f + 9, uz*.017f) - .5f)*30.f;   // domain warp: bent ridges, no grid look
-  float reg = pn(wx*.0036f + 17, wz*.0036f - 5)*.55f + pn(wz*.0052f - 3, wx*.0052f + 29)*.3f + pn(wx*.013f, wz*.013f + 21)*.15f;   // where the massifs are
-  float mt = sst(.4f, .7f, reg)*inland*centre, m2 = mt*mt;   // mountain massifs: separate ranges with plains between them, not half of the island
+  float reg = pn(wx*.0022f + 17, wz*.0022f - 5)*.55f + pn(wz*.0031f - 3, wx*.0031f + 29)*.3f + pn(wx*.013f, wz*.013f + 21)*.15f;   // where the massifs are: a few big ranges (low frequency), not a mountain every 300 units
+  float mt = sst(.58f, .74f, reg)*inland*centre, m2 = mt*mt;   // mountain massifs: a few separate ranges with wide plains between them (about a tenth of the land)
   float hil = sst(.3f, .72f, pn(x*.0045f - 9, z*.0045f + 13));                              // plains vs hill country
   float e = pn(x*.012f, z*.012f)*.55f + pn(x*.03f + 9, z*.03f)*.3f + pn(x*.07f, z*.07f + 4)*.15f;
   float h = (e - .32f)*(8.f + 20.f*hil)*coast + fminf(fmaxf(dc, -60.f), 120.f)*.06f - 1.f;
@@ -196,7 +196,7 @@ static float hgtB(float x, float z) {
     h += (ridge*amp*m2*(.55f + .45f*mt) + 7.f*m2)*pass;
   }
   // cliffs and broken ledges: stepped risers with irregular edges, strongest in the mountains and in rocky hill patches
-  float rk = pass*(1.f - val)*fminf(1.f, sst(.5f, .68f, pn(x*.017f + 3, z*.017f))*(.35f + .65f*hil) + m2*.6f*sst(.35f, .7f, pn(x*.021f - 4, z*.021f + 1)));
+  float rk = pass*(1.f - val)*fminf(1.f, sst(.6f, .76f, pn(x*.017f + 3, z*.017f))*(.3f + .7f*hil) + m2*.6f*sst(.35f, .7f, pn(x*.021f - 4, z*.021f + 1)));
   if (h > 3.5f && rk > 0.f) {
     float jt = (pn(x*.045f, z*.045f + 9) - .5f)*.9f + (pn(x*.08f, z*.08f) - .5f)*.35f, st = 3.f + 5.f*pn(x*.011f - 12, z*.011f + 6), t = (h - 3.5f)/st + jt, f0 = floorf(t), f = t - f0;
     float hs = 3.5f + (f0 + f*.22f + sst(.5f, .8f, f)*.78f - jt)*st;
@@ -717,7 +717,7 @@ static void mapStep() {
     int j = mapRow++; float z = (j/(M - 1.f)*2 - 1)*E;
     for (int i = 0; i < M; i++) {
       float x = (i/(M - 1.f)*2 - 1)*E, h = sampG(gH, x, z), d, w, r, g, b; bioParts(x, z, d, w);
-      if (h < -.2f) { float t = fminf(1.f, (-.2f - h)/2.f); r = .2f - .15f*t; g = .5f - .3f*t; b = .75f - .2f*t; }
+      if (h < -.2f) { float t = sst(0.f, 1.f, fminf(1.f, (-.2f - h)/2.f)); r = .2f + (13/255.f - .2f)*t; g = .5f + (51/255.f - .5f)*t; b = .75f + (140/255.f - .75f)*t; }   // shallows -> deep water, the deep colour is exactly the page background (#0d338c)
       else if (h < 1.6f) { r = .85f; g = .78f; b = .55f; }
       else {
         float t = fminf(1.f, h/18.f), kd = sst(.2f, .8f, d), kw = sst(.6f, .9f, w);
@@ -725,11 +725,11 @@ static void mapStep() {
         r += (.85f - r)*kd; g += (.65f - g)*kd; b += (.38f - b)*kd;                              // desert
         r += (.93f - r)*kw; g += (.96f - g)*kw; b += (1.f - b)*kw;                              // snow
         float G = hypotf(sampG(mapHb, x + 8, z) - sampG(mapHb, x - 8, z), sampG(mapHb, x, z + 8) - sampG(mapHb, x, z - 8))/16.f, sl = 1.f - 1.f/sqrtf(1.f + G*G);   // slope of the smoothed ground
-        float rk = fmaxf(fmaxf(sst(.1f, .2f, sl), sst(38.f, 60.f, h)*sst(.03f, .08f, sl)), .92f*sst(7.f, 18.f, h));   // steep or high ground = mountain = grey in every biome
+        float rk = fmaxf(fmaxf(sst(.15f, .28f, sl), sst(38.f, 60.f, h)*sst(.03f, .08f, sl)), .92f*sst(13.f, 26.f, h));   // steep or high ground = mountain = grey in every biome
         r += (.52f - r)*rk; g += (.52f - g)*rk; b += (.5f - b)*rk;
       }
       float sh = 1.f + fmaxf(-.4f, fminf(.4f, (sampG(gH, x + 4, z) - h)*.1f)); if (h < -.2f) sh = 1.f;
-      unsigned char* q = mapBuf.data() + ((size_t)j*M + i)*4; q[0] = (unsigned char)fminf(255.f, r*sh*255); q[1] = (unsigned char)fminf(255.f, g*sh*255); q[2] = (unsigned char)fminf(255.f, b*sh*255); q[3] = 255;
+      unsigned char* q = mapBuf.data() + ((size_t)j*M + i)*4; q[0] = (unsigned char)fminf(255.f, r*sh*255 + .5f); q[1] = (unsigned char)fminf(255.f, g*sh*255 + .5f); q[2] = (unsigned char)fminf(255.f, b*sh*255 + .5f); q[3] = 255;
     }
   }
   if (mapRow < M) { mapProg((float)mapRow/M, 0.f); return; }
