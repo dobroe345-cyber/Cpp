@@ -86,7 +86,7 @@ EM_JS(void, aud, (int sf, int sp, int bu, float td, int jm), { if (window.audioS
 EM_JS(void, hud, (const char* s), { if (window.hudUpdate) window.hudUpdate(UTF8ToString(s)); });
 EM_JS(double, wcf, (int i, double d), { return window.WC && window.WC.length > i ? +window.WC[i] : d; });   // world settings from the menu
 EM_JS(void, wready, (double seed, int np, double rk, double tk), { if (window.worldReady) window.worldReady(seed, np, rk, tk); });
-EM_JS(void, mapImg, (const unsigned char* p, int m, float e), { var c = document.createElement('canvas'); c.width = c.height = m; var g = c.getContext('2d'), d = g.createImageData(m, m); d.data.set(HEAPU8.subarray(p, p + m*m*4)); g.putImageData(d, 0, 0); window.mapCanvas = c; window.MAPE = e; });
+EM_JS(void, mapImg, (const unsigned char* p, int m, float e), { var c = document.createElement('canvas'); c.width = c.height = m; var g = c.getContext('2d'), d = g.createImageData(m, m); d.data.set(HEAPU8.subarray(p, p + m*m*4)); g.putImageData(d, 0, 0); window.mapCanvas = c; window.MAPE = e; window.MAPM = m; });
 
 static const char* VS = "attribute vec3 p;attribute vec3 c;attribute vec4 i0;attribute vec4 i1;attribute vec4 i2;attribute vec4 i3;uniform mat4 m;uniform mat4 lm;uniform mat4 mm;uniform float tx;uniform float tm;uniform float inst;varying vec3 vc;varying float d;varying vec3 wp;varying vec4 ls;varying float wo;varying float vsn;"
   "void main(){vec3 q=p,cc=c;float o=0.;if(tx>1.5&&tx<2.5){o=.16*sin(tm*.7)+.1*sin(dot(p.xz,vec2(.06,.045))-tm*1.15);q.y+=o;}"
@@ -174,7 +174,7 @@ static float hgtB(float x, float z) {
   float ux = .8f*x - .6f*z, uz = .6f*x + .8f*z;   // rotated frame: the layers' value-noise lattices do not line up (no boxy shapes)
   float wx = ux + (pn(x*.006f + 3, z*.006f) - .5f)*120.f + (pn(uz*.017f, ux*.017f + 3) - .5f)*30.f, wz = uz + (pn(x*.006f, z*.006f + 8) - .5f)*120.f + (pn(ux*.017f + 9, uz*.017f) - .5f)*30.f;   // domain warp: bent ridges, no grid look
   float reg = pn(wx*.0036f + 17, wz*.0036f - 5)*.55f + pn(wz*.0052f - 3, wx*.0052f + 29)*.3f + pn(wx*.013f, wz*.013f + 21)*.15f;   // where the massifs are
-  float mt = sst(.32f, .64f, reg)*inland*centre, m2 = mt*mt;
+  float mt = sst(.4f, .7f, reg)*inland*centre, m2 = mt*mt;   // mountain massifs: separate ranges with plains between them, not half of the island
   float hil = sst(.3f, .72f, pn(x*.0045f - 9, z*.0045f + 13));                              // plains vs hill country
   float e = pn(x*.012f, z*.012f)*.55f + pn(x*.03f + 9, z*.03f)*.3f + pn(x*.07f, z*.07f + 4)*.15f;
   float h = (e - .32f)*(8.f + 20.f*hil)*coast + fminf(fmaxf(dc, -60.f), 120.f)*.06f - 1.f;
@@ -363,7 +363,7 @@ static bool astar(int s, int t, int cls, int pa, int pb, vector<int>& out) {   /
   int N = GN*GN, tx = t % GN, tz = t / GN, guard = 0; G.assign(N, 1e30f); P.assign(N, -1); C.assign(N, 0);
   priority_queue<Q> pq; G[s] = 0.f; pq.push({0.f, s});
   while (!pq.empty()) {
-    Q q = pq.top(); pq.pop(); int c = q.c; if (C[c]) continue; C[c] = 1; if (c == t) break; if (++guard > 700000) break;
+    Q q = pq.top(); pq.pop(); int c = q.c; if (C[c]) continue; C[c] = 1; if (c == t) break; if (++guard > 3000000) break;
     int ci = c % GN, cj = c / GN; float mc = mulAt(c, cls, pa, pb); if (mc < 0.f) mc = 1.f;
     for (int k = 0; k < 16; k++) {
       int dx = D[k][0], dz = D[k][1], ni = ci + dx, nj = cj + dz; if (ni < 0 || nj < 0 || ni >= GN || nj >= GN) continue;
@@ -551,7 +551,7 @@ static void pickSpawn() {
   bool useReach = !st.empty();
   while (!st.empty()) { int c = st.back(); st.pop_back(); int ci = c % GN, cj = c/GN; static const int D[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
     for (int k = 0; k < 4; k++) { int ni = ci + D[k][0], nj = cj + D[k][1]; if (ni < 0 || nj < 0 || ni >= GN || nj >= GN) continue; int n = nj*GN + ni; if (!reach[n] && gH[n] > -.2f && gS[n] < 1.f) { reach[n] = 1; st.push_back(n); } } }
-  const float SEP = 55.f*MS; const size_t MAXP = 10; int nc[2] = {0, 0};   // spread around the coast, as many as the beaches allow (up to 10)
+  const float SEP = 55.f*MS; const size_t MAXP = 12; int nc[2] = {0, 0};   // spread around the coast, as many as the beaches allow (up to 12)
   for (int pass = 0; pass < 2 && spawns.size() < 6; pass++) {   // 1st pass: real sand (the terrain shader is sandy below ~1 m) | 2nd pass (only when that gave too few): any gentle low shore
     float hMin = pass ? .2f : .3f, hMax = pass ? 1.5f : 1.f, gMax = pass ? .45f : .28f;
     cand.clear(); for (int j = 2; j < GN - 2; j++) for (int i = 2; i < GN - 2; i++) { float x = GO + (i + .5f)*GC, z = GO + (j + .5f)*GC; if (beachOk(x, z, hMin, hMax, gMax, useReach ? &reach : 0)) cand.push_back({x, z, 0.f}); }
@@ -570,7 +570,7 @@ static void pickSpawn() {
 }
 static void genWorld(const Cfg& c) {
   unsigned sd = (unsigned)c.seed; SD = sd*2654435761u + 0x9E3779B9u; SD ^= SD >> 15; SD *= 2246822519u; SD ^= SD >> 13;
-  gsd = SD | 1u; MS = fminf(fmaxf(c.size, .6f), 2.4f); WE = 440.f*MS; bioRot = ((SD >> 5) & 0xffff)/65536.f;
+  gsd = SD | 1u; MS = fminf(fmaxf(c.size, .6f), 8.f); WE = 440.f*MS; bioRot = ((SD >> 5) & 0xffff)/65536.f;
   polys.clear(); plats.clear(); WS.nPlat = WS.nRoad = WS.nTrail = WS.unlinked = 0; WS.roadLen = WS.trailLen = 0.f;
   aGen = 0; adjInit((int)ceilf(2*WE/AC) + 3); AO = -WE - AC;
   clrInit((int)ceilf(2*WE/CC) + 1);
@@ -593,7 +593,7 @@ static void genWorld(const Cfg& c) {
       gOk[c2] = f;
     }
   }
-  placePlats(min(max(c.plat, 0), 24));
+  placePlats(min(max(c.plat, 0), 40));
   for (size_t k = 0; k < plats.size(); k++) {
     const Plat& p = plats[k]; stampPlat(p, 2.f, 14.f); clrPlat(p, 3.f);
     float R = hypotf(p.hx, p.hz) + 6.f;
@@ -695,38 +695,57 @@ static void mmLine(unsigned char* img, int M, float x0, float z0, float x1, floa
     unsigned char* q = img + (j*M + i)*4; q[0] = (unsigned char)(q[0]*(1 - cv) + r*255*cv); q[1] = (unsigned char)(q[1]*(1 - cv) + g*255*cv); q[2] = (unsigned char)(q[2]*(1 - cv) + b*255*cv);
   }
 }
-static void fillMap(unsigned char* img, int M) {
-  const float E = WE;
-  for (int j = 0; j < M; j++) for (int i = 0; i < M; i++) {
-    float x = (i/(M - 1.f)*2 - 1)*E, z = (j/(M - 1.f)*2 - 1)*E, h = sampG(gH, x, z), d, w, r, g, b; bioParts(x, z, d, w);
-    if (h < -.2f) { float t = fminf(1.f, (-.2f - h)/4); r = .2f - .15f*t; g = .5f - .3f*t; b = .75f - .2f*t; }
-    else if (h < 1.6f) { r = .85f; g = .78f; b = .55f; }
-    else {
-      float t = fminf(1.f, h/18.f), kd = sst(.2f, .8f, d), kw = sst(.6f, .9f, w);
-      r = .25f + .1f*t; g = .5f - .08f*t; b = .2f + .04f*t;                                   // grass, a little darker up the hills
-      r += (.85f - r)*kd; g += (.65f - g)*kd; b += (.38f - b)*kd;                              // desert
-      r += (.93f - r)*kw; g += (.96f - g)*kw; b += (1.f - b)*kw;                              // snow
-      float G = sampG(gS, x, z), sl = 1.f - 1.f/sqrtf(1.f + G*G);                              // steep or high ground is bare rock (terrain shader rule) and mountains are grey
-      float rk = fmaxf(fmaxf(sst(.1f, .2f, sl), sst(38.f, 60.f, h)*sst(.03f, .08f, sl)), .92f*sst(7.f, 18.f, h));   // + high ground reads as mountain
-      r += (.52f - r)*rk; g += (.52f - g)*rk; b += (.5f - b)*rk;                               // grey in every biome
+// ---- map image: built in the background, a few milliseconds per frame (2048 x 2048), shown by the full-screen map in index.html ----
+EM_JS(void, mapReset, (), { window.mapCanvas = null; window.MAPP = 0; });
+EM_JS(void, mapProg, (float f, float ms), { window.MAPP = f; window.MAPT = ms; });
+static vector<unsigned char> mapBuf; static vector<float> mapHb; static int mapM = 0, mapRow = 0; static bool mapActive = false; static double mapT0 = 0;
+static void mapStart() {
+  mapReset(); mapM = 2048; mapBuf.assign((size_t)mapM*mapM*4, 0); mapRow = 0; mapActive = true; mapT0 = emscripten_get_now();
+  // blurred heights (box of 7 cells = 28 units): the slope shown on the map comes from these, so fine surface noise does not turn into rock
+  int N = GN; const int R = 3; vector<float> t((size_t)N*N); mapHb.assign((size_t)N*N, 0.f);
+  for (int j = 0; j < N; j++) for (int i = 0; i < N; i++) { float a = 0.f; for (int k = -R; k <= R; k++) a += gH[(size_t)j*N + min(max(i + k, 0), N - 1)]; t[(size_t)j*N + i] = a/(2*R + 1); }
+  for (int j = 0; j < N; j++) for (int i = 0; i < N; i++) { float a = 0.f; for (int k = -R; k <= R; k++) a += t[(size_t)min(max(j + k, 0), N - 1)*N + i]; mapHb[(size_t)j*N + i] = a/(2*R + 1); }
+}
+static void mapStep() {
+  if (!mapActive) return;
+  double t0 = emscripten_get_now(); const int M = mapM; const float E = WE;
+  while (mapRow < M && emscripten_get_now() - t0 < 4.0) {
+    int j = mapRow++; float z = (j/(M - 1.f)*2 - 1)*E;
+    for (int i = 0; i < M; i++) {
+      float x = (i/(M - 1.f)*2 - 1)*E, h = sampG(gH, x, z), d, w, r, g, b; bioParts(x, z, d, w);
+      if (h < -.2f) { float t = fminf(1.f, (-.2f - h)/4); r = .2f - .15f*t; g = .5f - .3f*t; b = .75f - .2f*t; }
+      else if (h < 1.6f) { r = .85f; g = .78f; b = .55f; }
+      else {
+        float t = fminf(1.f, h/18.f), kd = sst(.2f, .8f, d), kw = sst(.6f, .9f, w);
+        r = .25f + .1f*t; g = .5f - .08f*t; b = .2f + .04f*t;                                   // grass, a little darker up the hills
+        r += (.85f - r)*kd; g += (.65f - g)*kd; b += (.38f - b)*kd;                              // desert
+        r += (.93f - r)*kw; g += (.96f - g)*kw; b += (1.f - b)*kw;                              // snow
+        float G = hypotf(sampG(mapHb, x + 8, z) - sampG(mapHb, x - 8, z), sampG(mapHb, x, z + 8) - sampG(mapHb, x, z - 8))/16.f, sl = 1.f - 1.f/sqrtf(1.f + G*G);   // slope of the smoothed ground
+        float rk = fmaxf(fmaxf(sst(.1f, .2f, sl), sst(38.f, 60.f, h)*sst(.03f, .08f, sl)), .92f*sst(7.f, 18.f, h));   // steep or high ground = mountain = grey in every biome
+        r += (.52f - r)*rk; g += (.52f - g)*rk; b += (.5f - b)*rk;
+      }
+      float sh = 1.f + fmaxf(-.4f, fminf(.4f, (sampG(gH, x + 4, z) - h)*.1f)); if (h < -.2f) sh = 1.f;
+      unsigned char* q = mapBuf.data() + ((size_t)j*M + i)*4; q[0] = (unsigned char)fminf(255.f, r*sh*255); q[1] = (unsigned char)fminf(255.f, g*sh*255); q[2] = (unsigned char)fminf(255.f, b*sh*255); q[3] = 255;
     }
-    float sh = 1.f + fmaxf(-.4f, fminf(.4f, (sampG(gH, x + 4, z) - h)*.1f)); if (h < -.2f) sh = 1.f;
-    unsigned char* q = img + (j*M + i)*4; q[0] = (unsigned char)fminf(255.f, r*sh*255); q[1] = (unsigned char)fminf(255.f, g*sh*255); q[2] = (unsigned char)fminf(255.f, b*sh*255); q[3] = 255;
   }
+  if (mapRow < M) { mapProg((float)mapRow/M, 0.f); return; }
+  unsigned char* img = mapBuf.data(); float k = (M - 1)/(2*E);
   for (int pass = 1; pass >= 0; pass--) for (size_t q = 0; q < polys.size(); q++) if (polys[q].type == pass) {   // trails first, roads on top
-    const Poly& P = polys[q]; for (int k = 0; k + 1 < (int)P.x.size(); k++) {
-      if (pass == 0) mmLine(img, M, P.x[k], P.z[k], P.x[k+1], P.z[k+1], 1.25f, .14f, .14f, .16f, 1.f);
-      else mmLine(img, M, P.x[k], P.z[k], P.x[k+1], P.z[k+1], .6f, .55f, .32f, .12f, .95f);
+    const Poly& P = polys[q]; for (int a = 0; a + 1 < (int)P.x.size(); a++) {
+      if (pass == 0) mmLine(img, M, P.x[a], P.z[a], P.x[a+1], P.z[a+1], fmaxf(1.5f, 3.5f*k), .14f, .14f, .16f, 1.f);
+      else mmLine(img, M, P.x[a], P.z[a], P.x[a+1], P.z[a+1], fmaxf(.9f, 1.3f*k), .55f, .32f, .12f, .95f);
     }
   }
-  float k = (M - 1)/(2*E);
+  int hs = max(5, (int)(14.f*k + .5f));
   for (size_t q = 0; q < plats.size(); q++) {   // platforms: yellow squares with a dark outline
     int cx = (int)((plats[q].x + E)*k + .5f), cz = (int)((plats[q].z + E)*k + .5f);
-    for (int dj = -5; dj <= 5; dj++) for (int di = -5; di <= 5; di++) {
-      int ii = cx + di, jj = cz + dj; if (ii < 0 || jj < 0 || ii >= M || jj >= M) continue; unsigned char* t = img + (jj*M + ii)*4; bool edge = abs(di) == 5 || abs(dj) == 5;
+    for (int dj = -hs; dj <= hs; dj++) for (int di = -hs; di <= hs; di++) {
+      int ii = cx + di, jj = cz + dj; if (ii < 0 || jj < 0 || ii >= M || jj >= M) continue; unsigned char* t = img + ((size_t)jj*M + ii)*4; bool edge = abs(di) >= hs - 1 || abs(dj) >= hs - 1;
       t[0] = edge ? 20 : 255; t[1] = edge ? 20 : 205; t[2] = edge ? 24 : 30;
     }
   }
+  mapImg(img, M, E); mapProg(1.f, (float)(emscripten_get_now() - mapT0));
+  vector<unsigned char>().swap(mapBuf); vector<float>().swap(mapHb); mapActive = false;
 }
 // @@WORLD_END
 static float rnd() { rs = rs * 1664525u + 1013904223u; return (rs >> 8) / 16777216.f; }
@@ -1049,7 +1068,7 @@ static void update(float dt) {
       { static int hist[48]; memset(hist, 0, sizeof hist); int cx = (int)floorf(px/NCS), cz = (int)floorf(pz/NCS);
         for (int j = cz - 1; j <= cz + 1; j++) for (int i = cx - 1; i <= cx + 1; i++) { NChunk* c = ncFind(i, j); if (!c) continue; for (int k = 0; k < c->n; k++) { float dx = c->x[k] - px, dz = c->z[k] - pz; if (dx*dx + dz*dz < 6400.f && c->type[k] < 48) hist[c->type[k]]++; } }
         tpHist(hist, 48); } } }
-  static bool mld = false; if (!mld && gk(11)) { loadModels(); mld = true; } doorStep(dt); trLoadStep();
+  static bool mld = false; if (!mld && gk(11)) { loadModels(); mld = true; } doorStep(dt); trLoadStep(); mapStep();
   inBush = false; tod += dt/240; if (tod > 1) tod -= 1; cd -= dt; msgT -= dt;
   food -= dt*.4f; thirst = fmaxf(0.f, thirst - dt*.55f);
   if (food <= 0 || thirst <= 0) { food = fmaxf(food, 0.f); hp -= dt*2; } else if (food > 50 && thirst > 50 && hp < 100) hp = fminf(100, hp + dt*2);
@@ -1582,7 +1601,7 @@ static void newWorld() {   // (re)generate everything from the menu settings
   Cfg c; c.seed = wcf(0, 12345); c.size = (float)wcf(1, 1.4); c.plat = (int)wcf(2, 8); c.loops = (int)wcf(3, 1); c.trails = (int)wcf(4, 8);
   genWorld(c); resetWorldCaches();
   px = spX; pz = spZ; py = meshH(px, pz); vy = 0; yaw = spYaw; pitch = 0; blks.clear();
-  static unsigned char img[512*512*4]; fillMap(img, 512); mapImg(img, 512, WE);
+  mapStart();
   rdirty = true; rasterWindow(px, pz);   // the grass bake needs the road mask around the player
   streamWorld(true);
   static bool first = true; if (!first) { char b[64]; snprintf(b, sizeof b, "Новый мир · сид %u", (unsigned)c.seed); say(b); msgT = 4; } first = false;
