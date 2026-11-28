@@ -145,7 +145,10 @@ static float MS = 1.4f, bioRot = 0.f, WE = 616.f;   // map scale (1 = the origin
 // Biome weights: d = desert (0..1), w = winter (0..1). The two never overlap (separate angular sectors) and a temperate hub around the centre
 // keeps them apart where the sectors converge, so desert and winter never touch and the snow has no desert outline.
 static void bioParts(float x, float z, float& d, float& w) {
-  float bn = atan2f(z, x)/6.2832f + .5f + bioRot + (pn(x*.006f, z*.006f) - .5f)*.18f;
+  // the wobble of the sector edges depends on the radius only, plus a slow sine of the angle (slope < 1): bn always grows with the angle, so every
+  // boundary is one curve running outwards from the centre and a biome can never get round "bites" or islands of another biome inside it
+  float th = atan2f(z, x)/6.2832f + .5f;
+  float bn = th + bioRot + (pn(hypotf(x, z)*.0065f + 3.f, 7.7f) - .5f)*.16f + .03f*sinf(12.566f*th + 1.3f);
   bn -= floorf(bn);
   auto sm = [](float a, float b, float x) { float t=fminf(1.f,fmaxf(0.f,(x-a)/(b-a))); return t*t*(3.f-2.f*t); };
   float dd = sm(.07f, .16f, bn) * (1.f - sm(.30f, .39f, bn));
@@ -153,7 +156,7 @@ static void bioParts(float x, float z, float& d, float& w) {
   float land = .72f + .28f*pn(x*.0028f + 17.f, z*.0028f - 9.f);
   float hub = sm(45.f*MS, 115.f*MS, hypotf(x, z));
   d = dd*land*hub;
-  w = fminf(1.f, sn*(1.15f + .35f*(pn(x*.0035f - 21.f, z*.0035f + 13.f) - .5f)))*hub;
+  w = sn*hub;
 }
 // gameplay class (plants, rocks, audio): 0 temperate, 0..1 desert amount, 1.4 = ramp to the snow (ground half snow), 2 = snow
 static float biomeAt(float x, float z) { float d, w; bioParts(x, z, d, w); return w > .9f ? 2.f : w > .6f ? 1.4f : d; }
@@ -198,6 +201,10 @@ static float hgtB(float x, float z) {
   float cl = fminf(1.f, fmaxf(0.f, (pn(cu*2.3f + 11, su*2.3f + 11) - .48f)*7.f));   // sea cliffs
   if (cl > 0.f) { float top = 9.f + 12.f*pn(x*.012f, z*.012f + 7); h = fmaxf(h, h + (top - h)*cl*fminf(1.f, fmaxf(0.f, (dc - 14.f)/18.f))*(1.f - sst(45.f, 90.f, dc))); }
   h += ((pn(x*.075f + 1, z*.075f) - .5f)*1.1f + (pn(x*.095f, z*.095f + 5) - .5f)*(.45f + 1.2f*rk))*sst(2.5f, 6.f, h);   // surface roughness
+  {   // no ponds: away from the shore the ground never dips down to the water, so the only water is the sea. The floor rises from the sea bed over the beach to dry land
+    float fl = -1.f + 1.15f*sst(4.f, 12.f, dc) + 1.85f*sst(12.f, 50.f, dc);
+    if (h < fl) h = fl - .3f*(1.f - expf(-(fl - h)/.3f));
+  }
   if (h < -.2f) h = -.2f + (h + .2f)*3.f;
   return h;
 }
@@ -488,19 +495,78 @@ static void makeTrails(int T) {   // trails start at any point of any road, on e
     if (route(sx, sz, tx, tz, 1, -1, -1, 1) > 25.f) break;
   }
 }
-static void pickSpawn() {   // next to the road that is closest to the centre of the island, looking at it
+// ---- spawn: only on the beach, never in the winter biome (cold is coming later). Points are found on the finished map, so they follow every seed ----
+struct SpawnPt { float x, z, yaw; };
+static vector<SpawnPt> spawns; static int spLast = -1;
+EM_JS(void, spClear, (), { window.SPL = []; });
+EM_JS(void, spDbg, (int a, int b, int c, int d), { window.SPD = [a, b, c, d]; });
+EM_JS(void, spPush, (float x, float z, float h, float w, int lakes), { window.SPL.push([x, z, h, w, lakes]); });
+static int lakeCells() {   // water cells that are not connected to the sea (must stay 0)
+  int N = GN*GN; vector<unsigned char> sea(N, 0); vector<int> st; static const int D[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+  for (int i = 0; i < GN; i++) for (int e = 0; e < 4; e++) { int c = e == 0 ? i : e == 1 ? (GN - 1)*GN + i : e == 2 ? i*GN : i*GN + GN - 1; if (gH[c] < -.2f && !sea[c]) { sea[c] = 1; st.push_back(c); } }
+  while (!st.empty()) { int c = st.back(); st.pop_back(); int ci = c % GN, cj = c/GN; for (int k = 0; k < 4; k++) { int ni = ci + D[k][0], nj = cj + D[k][1]; if (ni < 0 || nj < 0 || ni >= GN || nj >= GN) continue; int n = nj*GN + ni; if (!sea[n] && gH[n] < -.2f) { sea[n] = 1; st.push_back(n); } } }
+  int lk = 0; for (int c = 0; c < N; c++) if (gH[c] < -.2f && !sea[c]) lk++;
+  return lk;
+}
+static bool beachOk(float x, float z, float hMin, float hMax, float gMax, const vector<unsigned char>* reach) {   // sand, gentle, no road / platform, not winter, the sea close by, open ground around, a walkable way to the roads
+  float h = sampG(gH, x, z); if (h < hMin || h > hMax || sampG(gS, x, z) > gMax) return false;
+  if (bioW(x, z) > .02f) return false;
+  int c = cellAt(x, z); if (gOk[c] || gPl[c] || (reach && !(*reach)[c])) return false;
+  for (int k = 0; k < 8; k++) for (float d = 6.f; d <= 11.f; d += 5.f) { float xx = x + cosf(k*.7854f)*d, zz = z + sinf(k*.7854f)*d; if (sampG(gH, xx, zz) > -.2f && sampG(gS, xx, zz) > .6f) return false; }   // no cliff wall right next to the spawn
+  for (int k = 0; k < 8; k++) { float a = k*.7854f; for (float d = 8.f; d <= 28.f; d += 10.f) if (sampG(gH, x + cosf(a)*d, z + sinf(a)*d) < -.2f) return true; }
+  return false;
+}
+static float openYaw(float x, float z) {   // look along the longest stretch of open ground, preferably towards the middle of the island
+  float cd = atan2f(-z, -x), best = -1e9f, ba = cd;
+  for (int k = 0; k < 16; k++) {
+    float a = k*.3927f, L = 0.f;
+    for (float d = 4.f; d <= 48.f; d += 4.f) { float xx = x + cosf(a)*d, zz = z + sinf(a)*d; if (sampG(gH, xx, zz) < -.2f || sampG(gS, xx, zz) > .5f) break; L = d; }
+    float da = fabsf(remainderf(a - cd, 6.2832f)), sc = L - 14.f*da; if (sc > best) { best = sc; ba = a; }
+  }
+  return atan2f(-cosf(ba), -sinf(ba));
+}
+static void nextSpawn() {   // a random point of the set, never the same one twice in a row
+  int n = (int)spawns.size(); if (!n) return;
+  int k = n == 1 ? 0 : (int)((long long)emscripten_get_now() % n); if (n > 1 && k == spLast) k = (k + 1) % n;
+  spLast = k; spX = spawns[k].x; spZ = spawns[k].z; spYaw = spawns[k].yaw;
+}
+static bool roadSpawn() {   // fallback when the island has no usable beach: next to the road that is closest to the centre, looking at it
   float bd = 1e30f; int bp = -1, bi = 0;
   for (size_t q = 0; q < polys.size(); q++) if (polys[q].type == 0) for (int i = 4; i + 4 < (int)polys[q].x.size(); i += 2) { float d = hypotf(polys[q].x[i], polys[q].z[i]); if (d < bd) { bd = d; bp = (int)q; bi = i; } }
   if (bp >= 0) {
     const Poly& P = polys[bp]; float tx = P.x[bi + 2] - P.x[bi - 2], tz = P.z[bi + 2] - P.z[bi - 2], l = hypotf(tx, tz) + 1e-6f; tx /= l; tz /= l;
     for (int sg = 1; sg >= -1; sg -= 2) {
       float sx = P.x[bi] - tz*sg*7.f, sz = P.z[bi] + tx*sg*7.f;
-      if (hgt(sx, sz) >= 3.f) { spX = sx; spZ = sz; spYaw = atan2f(-(P.x[bi] - sx), -(P.z[bi] - sz)); return; }
+      if (hgt(sx, sz) >= 3.f && bioW(sx, sz) <= .02f) { spawns.push_back({sx, sz, atan2f(-(P.x[bi] - sx), -(P.z[bi] - sz))}); return true; }
     }
-    spX = P.x[bi]; spZ = P.z[bi]; spYaw = atan2f(-tx, -tz); return;
   }
-  for (float r = 0; r < WE; r += 8.f) for (int k = 0; k < 16; k++) { float a = k*.3927f, x = cosf(a)*r, z = sinf(a)*r; if (hgt(x, z) >= 3.5f) { spX = x; spZ = z; spYaw = 0; return; } }
-  spX = spZ = spYaw = 0;
+  for (float r = 0; r < WE; r += 8.f) for (int k = 0; k < 16; k++) { float a = k*.3927f, x = cosf(a)*r, z = sinf(a)*r; if (hgt(x, z) >= 3.5f && bioW(x, z) <= .02f) { spawns.push_back({x, z, 0.f}); return true; } }
+  spawns.push_back({0.f, 0.f, 0.f}); return false;
+}
+static void pickSpawn() {
+  spawns.clear(); spLast = -1;
+  vector<SpawnPt> cand;
+  vector<unsigned char> reach(GN*GN, 0); vector<int> st;   // ground that can be walked from the roads / platforms (not cut off by cliffs or the sea)
+  for (int c = 0; c < GN*GN; c++) if ((gOk[c] & 3) || gPl[c]) { reach[c] = 1; st.push_back(c); }
+  bool useReach = !st.empty();
+  while (!st.empty()) { int c = st.back(); st.pop_back(); int ci = c % GN, cj = c/GN; static const int D[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (int k = 0; k < 4; k++) { int ni = ci + D[k][0], nj = cj + D[k][1]; if (ni < 0 || nj < 0 || ni >= GN || nj >= GN) continue; int n = nj*GN + ni; if (!reach[n] && gH[n] > -.2f && gS[n] < 1.f) { reach[n] = 1; st.push_back(n); } } }
+  const float SEP = 55.f*MS; const size_t MAXP = 10; int nc[2] = {0, 0};   // spread around the coast, as many as the beaches allow (up to 10)
+  for (int pass = 0; pass < 2 && spawns.size() < 6; pass++) {   // 1st pass: real sand (the terrain shader is sandy below ~1 m) | 2nd pass (only when that gave too few): any gentle low shore
+    float hMin = pass ? .2f : .3f, hMax = pass ? 1.5f : 1.f, gMax = pass ? .45f : .28f;
+    cand.clear(); for (int j = 2; j < GN - 2; j++) for (int i = 2; i < GN - 2; i++) { float x = GO + (i + .5f)*GC, z = GO + (j + .5f)*GC; if (beachOk(x, z, hMin, hMax, gMax, useReach ? &reach : 0)) cand.push_back({x, z, 0.f}); }
+    nc[pass] = (int)cand.size();
+    unsigned r = SD | 1u;
+    for (size_t i = cand.size(); i > 1; i--) { r = r*1664525u + 1013904223u; size_t k = (r >> 8) % i; swap(cand[i - 1], cand[k]); }
+    for (size_t i = 0; i < cand.size() && spawns.size() < MAXP; i++) {
+      bool far = true; for (size_t k = 0; k < spawns.size(); k++) if (hypotf(cand[i].x - spawns[k].x, cand[i].z - spawns[k].z) < SEP) { far = false; break; }
+      if (far) spawns.push_back({cand[i].x, cand[i].z, openYaw(cand[i].x, cand[i].z)});
+    }
+  }
+  { int rc = 0; for (size_t c = 0; c < reach.size(); c++) rc += reach[c]; spDbg(nc[0], nc[1], rc, GN*GN); }
+  if (spawns.empty()) roadSpawn();
+  int lk = lakeCells(); spClear(); for (size_t i = 0; i < spawns.size(); i++) spPush(spawns[i].x, spawns[i].z, sampG(gH, spawns[i].x, spawns[i].z), bioW(spawns[i].x, spawns[i].z), lk);
+  nextSpawn();
 }
 static void genWorld(const Cfg& c) {
   unsigned sd = (unsigned)c.seed; SD = sd*2654435761u + 0x9E3779B9u; SD ^= SD >> 15; SD *= 2246822519u; SD ^= SD >> 13;
@@ -987,7 +1053,7 @@ static void update(float dt) {
   inBush = false; tod += dt/240; if (tod > 1) tod -= 1; cd -= dt; msgT -= dt;
   food -= dt*.4f; thirst = fmaxf(0.f, thirst - dt*.55f);
   if (food <= 0 || thirst <= 0) { food = fmaxf(food, 0.f); hp -= dt*2; } else if (food > 50 && thirst > 50 && hp < 100) hp = fminf(100, hp + dt*2);
-  if (hp <= 0) { hp = 100; food = 100; thirst = 100; wood = stone = metal = sulfur = 0; px = spX; pz = spZ; say("Ты умер. Ресурсы потеряны"); }
+  if (hp <= 0) { hp = 100; food = 100; thirst = 100; wood = stone = metal = sulfur = 0; nextSpawn(); px = spX; pz = spZ; yaw = spYaw; pitch = 0; streamWorld(true); py = meshH(px, pz); vy = 0; say("Ты умер. Ресурсы потеряны"); }
   float sx = gf(3), sy = gf(4);
   yaw -= gf(5)*.006f; pitch = fminf(fmaxf(pitch - gf(6)*.006f, -1.4f), 1.4f);
   float fx = -sinf(yaw), fz = -cosf(yaw), rx = cosf(yaw), rz = -sinf(yaw), sp = 5.f*(hypotf(sx, sy) > .95f ? 1.4f : 1.f);
