@@ -142,21 +142,25 @@ static float pn(float x, float z) {
   return (vn(ix,iz)*(1-fx) + vn(ix+1,iz)*fx)*(1-fz) + (vn(ix,iz+1)*(1-fx) + vn(ix+1,iz+1)*fx)*fz;
 }
 static float MS = 1.4f, bioRot = 0.f, WE = 616.f;   // map scale (1 = the original island), biome rotation, half-size of the world
-// Biome weights: d = desert (0..1), w = winter (0..1). The two never overlap (separate angular sectors) and a temperate hub around the centre
-// keeps them apart where the sectors converge, so desert and winter never touch and the snow has no desert outline.
-static void bioParts(float x, float z, float& d, float& w) {
-  // the wobble of the sector edges depends on the radius only, plus a slow sine of the angle (slope < 1): bn always grows with the angle, so every
-  // boundary is one curve running outwards from the centre and a biome can never get round "bites" or islands of another biome inside it
+// Biome weights: d = desert (0..1), w = winter (0..1). Each biome is a wedge that opens outwards from its own apex, and the two apexes lie on opposite
+// sides of the centre (85 units * map scale away from it), so desert and winter can never touch, the middle of the island is temperate, and the
+// edges are straight rays with soft ramps, no round bites.
+// The wobble of a wedge's edges depends on the distance from its apex only (plus a slow sine of the angle, slope < 1): the angle coordinate always
+// grows with the real angle, so every edge is one curve running outwards and a biome can never get islands of another biome inside it.
+static float bnAt(float x, float z) {
   float th = atan2f(z, x)/6.2832f + .5f;
   float bn = th + bioRot + (pn(hypotf(x, z)*.0065f + 3.f, 7.7f) - .5f)*.16f + .03f*sinf(12.566f*th + 1.3f);
-  bn -= floorf(bn);
+  return bn - floorf(bn);
+}
+static void bioParts(float x, float z, float& d, float& w) {
   auto sm = [](float a, float b, float x) { float t=fminf(1.f,fmaxf(0.f,(x-a)/(b-a))); return t*t*(3.f-2.f*t); };
-  float dd = sm(.07f, .16f, bn) * (1.f - sm(.30f, .39f, bn));
-  float sn = sm(.56f, .63f, bn) * (1.f - sm(.82f, .9f, bn));
+  float R0 = 85.f*MS, ad = (.23f - bioRot - .5f)*6.2832f, as = (.73f - bioRot - .5f)*6.2832f;
+  float bd = bnAt(x - cosf(ad)*R0, z - sinf(ad)*R0), bs = bnAt(x - cosf(as)*R0, z - sinf(as)*R0);
+  float dd = sm(.07f, .16f, bd) * (1.f - sm(.30f, .39f, bd));
+  float sn = sm(.56f, .63f, bs) * (1.f - sm(.82f, .9f, bs));
   float land = .72f + .28f*pn(x*.0028f + 17.f, z*.0028f - 9.f);
-  float hub = sm(45.f*MS, 115.f*MS, hypotf(x, z));
-  d = dd*land*hub;
-  w = sn*hub;
+  w = sn;
+  d = dd*land*(1.f - fminf(1.f, w*8.f));
 }
 // gameplay class (plants, rocks, audio): 0 temperate, 0..1 desert amount, 1.4 = ramp to the snow (ground half snow), 2 = snow
 static float biomeAt(float x, float z) { float d, w; bioParts(x, z, d, w); return w > .9f ? 2.f : w > .6f ? 1.4f : d; }
@@ -713,7 +717,7 @@ static void mapStep() {
     int j = mapRow++; float z = (j/(M - 1.f)*2 - 1)*E;
     for (int i = 0; i < M; i++) {
       float x = (i/(M - 1.f)*2 - 1)*E, h = sampG(gH, x, z), d, w, r, g, b; bioParts(x, z, d, w);
-      if (h < -.2f) { float t = fminf(1.f, (-.2f - h)/4); r = .2f - .15f*t; g = .5f - .3f*t; b = .75f - .2f*t; }
+      if (h < -.2f) { float t = fminf(1.f, (-.2f - h)/2.f); r = .2f - .15f*t; g = .5f - .3f*t; b = .75f - .2f*t; }
       else if (h < 1.6f) { r = .85f; g = .78f; b = .55f; }
       else {
         float t = fminf(1.f, h/18.f), kd = sst(.2f, .8f, d), kw = sst(.6f, .9f, w);
